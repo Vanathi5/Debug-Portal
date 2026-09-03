@@ -1,28 +1,59 @@
 from flask import Flask, render_template_string, request, redirect, url_for, send_file
 import sqlite3
+import psycopg2
 import pandas as pd
 from datetime import datetime
+import os
 
 app = Flask(__name__)
-DB_NAME = "debug_traceability.db"
+
+# Fetch database connection URL from Render environment variable
+DB_URL = os.environ.get('DATABASE_URL')
+
+def get_db():
+    """Dynamically connects to PostgreSQL on Render or SQLite locally."""
+    if DB_URL:
+        # Render provides 'postgres://', psycopg2 requires 'postgresql://'
+        url = DB_URL.replace("postgres://", "postgresql://", 1) if DB_URL.startswith("postgres://") else DB_URL
+        return psycopg2.connect(url)
+    return sqlite3.connect("debug_traceability.db")
 
 def init_db():
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS debug_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            project_number TEXT NOT NULL,
-            serial_number TEXT NOT NULL,
-            timestamp TEXT NOT NULL,
-            error_code TEXT NOT NULL,
-            action_type TEXT NOT NULL,
-            replaced_components TEXT,
-            action_taken TEXT,
-            debug_technician TEXT,
-            final_status TEXT NOT NULL
-        )
-    ''')
+    
+    if DB_URL:
+        # PostgreSQL syntax
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS debug_logs (
+                id SERIAL PRIMARY KEY,
+                project_number TEXT NOT NULL,
+                serial_number TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                error_code TEXT NOT NULL,
+                action_type TEXT NOT NULL,
+                replaced_components TEXT,
+                action_taken TEXT,
+                debug_technician TEXT,
+                final_status TEXT NOT NULL
+            )
+        ''')
+    else:
+        # SQLite syntax
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS debug_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_number TEXT NOT NULL,
+                serial_number TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                error_code TEXT NOT NULL,
+                action_type TEXT NOT NULL,
+                replaced_components TEXT,
+                action_taken TEXT,
+                debug_technician TEXT,
+                final_status TEXT NOT NULL
+            )
+        ''')
     conn.commit()
     conn.close()
 
@@ -212,7 +243,7 @@ HTML_TEMPLATE = '''
 
 @app.route('/')
 def index():
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM debug_logs ORDER BY id DESC LIMIT 15")
     logs = cursor.fetchall()
@@ -261,12 +292,18 @@ def add_log():
     final_status = request.form['final_status']
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db()
     cursor = conn.cursor()
-    cursor.execute('''
+    
+    # Use %s for PostgreSQL (Render/Neon) and ? for local SQLite
+    p = "%s" if DB_URL else "?"
+    
+    query = f'''
         INSERT INTO debug_logs (project_number, serial_number, timestamp, error_code, action_type, replaced_components, action_taken, debug_technician, final_status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (project_number, sn, timestamp, error_code, action_type, replaced_components, action_taken, tech, final_status))
+        VALUES ({p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p})
+    '''
+    
+    cursor.execute(query, (project_number, sn, timestamp, error_code, action_type, replaced_components, action_taken, tech, final_status))
     conn.commit()
     conn.close()
 
@@ -274,7 +311,7 @@ def add_log():
 
 @app.route('/export')
 def export():
-    conn = sqlite3.connect(DB_NAME)
+    conn = get_db()
     df = pd.read_sql_query("SELECT * FROM debug_logs", conn)
     conn.close()
 
@@ -285,12 +322,14 @@ def export():
         df.to_excel(writer, sheet_name='All Units Log', index=False)
 
         # Sheet 2: Resolution Breakdown (Initial Failure vs How Solved)
-        pivot_table = pd.crosstab(df['error_code'], df['action_type'], margins=True, margins_name='Total')
-        pivot_table.to_excel(writer, sheet_name='Failure vs Resolution Summary')
+        if not df.empty and 'error_code' in df.columns and 'action_type' in df.columns:
+            pivot_table = pd.crosstab(df['error_code'], df['action_type'], margins=True, margins_name='Total')
+            pivot_table.to_excel(writer, sheet_name='Failure vs Resolution Summary')
 
         # Sheet 3: Percentage Summary
-        stats_summary = df.groupby(['project_number', 'final_status']).size().unstack(fill_value=0)
-        stats_summary.to_excel(writer, sheet_name='Project Yield Summary')
+        if not df.empty and 'project_number' in df.columns and 'final_status' in df.columns:
+            stats_summary = df.groupby(['project_number', 'final_status']).size().unstack(fill_value=0)
+            stats_summary.to_excel(writer, sheet_name='Project Yield Summary')
 
     return send_file(export_path, as_attachment=True)
 
