@@ -151,12 +151,11 @@ HTML_TEMPLATE = '''
                     <label for="error_code">3. Initial Failure / Error Code:</label>
                     <select id="error_code" name="error_code" required>
                         <option value="">-- Select Error Code --</option>
-                        <option value="ERR_PMIC_VOLT">ERR_PMIC_VOLT (Power Rail Failure)</option>
-                        <option value="ERR_CLOCK_GEN">ERR_CLOCK_GEN (Clock Flashing Fail)</option>
-                        <option value="ERR_DDR_READ">ERR_DDR_READ (DDR Test Fail)</option>
-                        <option value="ERR_ETH_COMM">ERR_ETH_COMM (Ethernet Fail)</option>
-                        <option value="ERR_FPGA_CONFIG">ERR_FPGA_CONFIG (FPGA Boot Fail)</option>
-                        <option value="ERR_NO_BOOT">ERR_NO_BOOT (No Power / No Boot)</option>
+                        <option value="Configuration_Troot">Configuration_Troot</option>
+                        <option value="Production Troot Programming">Production Troot Programming</option>
+                        <option value="Linux Login Fail">Linux Login Fail</option>
+                        <option value="Extended eMMc Failure">Extended eMMc Failure(Ethernet Fail)</option>
+                        <option value="No Power">No Power</option>
                         <option value="OTHER">OTHER (Specify in notes)</option>
                     </select>
                 </div>
