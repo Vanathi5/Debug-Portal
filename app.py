@@ -66,24 +66,38 @@ HTML_TEMPLATE = '''
     <title>Production Traceability & Failure Analytics</title>
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 20px; background-color: #f4f6f9; }
-        .container { max-width: 1150px; margin: 0 auto; }
+        .container { max-width: 900px; margin: 0 auto; }
         .card { background: white; padding: 25px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); margin-bottom: 20px; }
         h2 { margin-top: 0; color: #102C57; }
-        .grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px; }
-        .full-width { grid-column: span 3; }
-        label { font-weight: bold; font-size: 0.85em; color: #333; display: block; margin-bottom: 5px; }
-        input, select, textarea { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-size: 14px; }
-        button { background-color: #102C57; color: white; border: none; padding: 12px 20px; font-size: 16px; font-weight: bold; border-radius: 4px; cursor: pointer; width: 100%; }
+        
+        /* Clean Single-Column Form Layout */
+        .form-grid { display: flex; flex-direction: column; gap: 16px; }
+        .form-group { display: flex; flex-direction: column; width: 100%; }
+        .form-group label { font-weight: bold; font-size: 0.9em; color: #333; margin-bottom: 6px; }
+        .form-group input, .form-group select, .form-group textarea { 
+            width: 100%; 
+            padding: 10px; 
+            border: 1px solid #ccc; 
+            border-radius: 6px; 
+            box-sizing: border-box; 
+            font-size: 14px; 
+        }
+        .form-group textarea { resize: vertical; height: 80px; }
+        
+        button { background-color: #102C57; color: white; border: none; padding: 12px 20px; font-size: 16px; font-weight: bold; border-radius: 6px; cursor: pointer; width: 100%; margin-top: 10px; }
         button:hover { background-color: #0b1f3f; }
-        .btn-export { background-color: #28a745; width: auto; float: right; padding: 8px 15px; font-size: 14px; }
+        
+        .btn-export { background-color: #28a745; width: auto; float: right; padding: 8px 15px; font-size: 14px; margin-top: 0; }
         .stats { display: flex; justify-content: space-between; margin-bottom: 20px; }
         .stat-box { background: white; padding: 15px; border-radius: 6px; text-align: center; flex: 1; margin: 0 5px; box-shadow: 0 1px 5px rgba(0,0,0,0.05); }
         .stat-number { font-size: 22px; font-weight: bold; color: #102C57; }
         .stat-pct { font-size: 13px; color: #666; font-weight: normal; margin-top: 4px; }
+        
         table { width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 13px; }
         th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
         th { background-color: #102C57; color: white; }
         tr:nth-child(even) { background-color: #f9f9f9; }
+        
         .badge-pass { background-color: #28a745; color: white; padding: 3px 8px; border-radius: 3px; font-weight: bold; }
         .badge-retest { background-color: #17a2b8; color: white; padding: 3px 8px; border-radius: 3px; font-weight: bold; }
         .badge-fail { background-color: #dc3545; color: white; padding: 3px 8px; border-radius: 3px; font-weight: bold; }
@@ -124,9 +138,9 @@ HTML_TEMPLATE = '''
     <!-- Failure Type Breakdown Cards -->
     <div class="card" style="padding: 15px;">
         <h4 style="margin-top:0; color:#102C57;">Initial Failure Breakdown (%)</h4>
-        <div style="display: flex; gap: 10px; font-size: 13px;">
+        <div style="display: flex; gap: 10px; font-size: 13px; flex-wrap: wrap;">
             {% for code, count in err_counts.items() %}
-            <div style="background: #f0f4f8; padding: 8px 12px; border-radius: 5px; flex: 1; text-align: center;">
+            <div style="background: #f0f4f8; padding: 8px 12px; border-radius: 5px; flex: 1; min-width: 120px; text-align: center;">
                 <strong>{{ code }}</strong><br>
                 <span style="font-size: 16px; font-weight: bold; color: #102C57;">{{ count }}</span> 
                 <span style="color: #555;">({{ "%.1f"|format(count / stats['total'] * 100) if stats['total'] > 0 else 0 }}%)</span>
@@ -137,62 +151,65 @@ HTML_TEMPLATE = '''
 
     <!-- Entry Form -->
     <div class="card">
-        <form action="/add" method="POST">
-            <div class="grid">
-                <div>
-                    <label for="project">1. Project Number (e.g., EN107682, EN108148):</label>
-                    <input type="text" id="project" name="project_number" placeholder="e.g. EN107685" required>
-                </div>
-                <div>
-                <div>
-                    <label for="sn">2. Board Serial Number (Scan Barcode):</label>
-                    <input type="text" id="sn" name="serial_number" placeholder="e.g., SN408123" pattern="SN\d{6}" title="Serial number must start with 'SN' followed by 6 digits (e.g., SN408123)" autofocus required>
-                </div>
-                <div>
-                    <label for="error_code">3. Initial Failure / Error Code:</label>
-                    <select id="error_code" name="error_code" required>
-                        <option value="">-- Select Error Code --</option>
-                        <option value="Configuration_Troot">Configuration_Troot</option>
-                        <option value="Production Troot Programming">Production Troot Programming</option>
-                        <option value="Linux Login Fail">Linux Login Fail</option>
-                        <option value="Extended eMMc Failure">Extended eMMc Failure(Ethernet Fail)</option>
-                        <option value="No Power">No Power</option>
-                        <option value="OTHER">OTHER (Specify in notes)</option>
-                    </select>
-                </div>
-                <div>
-                    <label for="action_type">4. How Was It Solved? (Action Category):</label>
-                    <select id="action_type" name="action_type" required>
-                        <option value="Direct Retest (No Repair)">Direct Retest (No Repair - Socket/Contact Issue)</option>
-                        <option value="Rework / Component Replacement">Rework / Component Replacement</option>
-                        <option value="Reflow Soldering">Reflow / Solder Bridge Clean</option>
-                        <option value="Scrap / Unrepairable">Scrap / Unrepairable</option>
-                    </select>
-                </div>
-                <div>
-                    <label for="status">5. Final Status after Retest:</label>
-                    <select id="status" name="final_status" required>
-                        <option value="PASSED">PASSED</option>
-                        <option value="FAILED">FAILED</option>
-                        <option value="SCRAPPED">SCRAPPED</option>
-                    </select>
-                </div>
-                <div>
-                    <label for="components">6. Replaced IC / Components (if any):</label>
-                    <input type="text" id="components" name="replaced_components" placeholder="e.g. Replaced U4, R12">
-                </div>
-                <div class="full-width">
-                    <label for="tech">7. Debug Technician Name / ID:</label>
-                    <input type="text" id="tech" name="debug_technician" placeholder="e.g. Tech_01" required>
-                </div>
-                <div class="full-width">
-                    <label for="notes">8. Detailed Action Taken & Root Cause Notes:</label>
-                    <textarea id="notes" name="action_taken" rows="2" placeholder="Describe root cause and resolution..."></textarea>
-                </div>
-                <div class="full-width">
-                    <button type="submit">💾 Save Log & Calculate Metrics</button>
-                </div>
+        <form action="/add" method="POST" class="form-grid">
+            <div class="form-group">
+                <label for="project">1. Project Number (e.g., EN107682, EN108148):</label>
+                <input type="text" id="project" name="project_number" placeholder="e.g. EN107685" required>
             </div>
+
+            <div class="form-group">
+                <label for="sn">2. Board Serial Number (Scan Barcode):</label>
+                <input type="text" id="sn" name="serial_number" placeholder="e.g., SN408123" pattern="SN\d{6}" title="Serial number must start with 'SN' followed by 6 digits (e.g., SN408123)" autofocus required>
+            </div>
+
+            <div class="form-group">
+                <label for="error_code">3. Initial Failure / Error Code:</label>
+                <select id="error_code" name="error_code" required>
+                    <option value="">-- Select Error Code --</option>
+                    <option value="Configuration_Troot">Configuration_Troot</option>
+                    <option value="Production Troot Programming">Production Troot Programming</option>
+                    <option value="Linux Login Fail">Linux Login Fail</option>
+                    <option value="Extended eMMc Failure">Extended eMMc Failure(Ethernet Fail)</option>
+                    <option value="No Power">No Power</option>
+                    <option value="OTHER">OTHER (Specify in notes)</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="action_type">4. How Was It Solved? (Action Category):</label>
+                <select id="action_type" name="action_type" required>
+                    <option value="Direct Retest (No Repair)">Direct Retest (No Repair - Socket/Contact Issue)</option>
+                    <option value="Rework / Component Replacement">Rework / Component Replacement</option>
+                    <option value="Reflow Soldering">Reflow / Solder Bridge Clean</option>
+                    <option value="Scrap / Unrepairable">Scrap / Unrepairable</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="status">5. Final Status after Retest:</label>
+                <select id="status" name="final_status" required>
+                    <option value="PASSED">PASSED</option>
+                    <option value="FAILED">FAILED</option>
+                    <option value="SCRAPPED">SCRAPPED</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="components">6. Replaced IC / Components (if any):</label>
+                <input type="text" id="components" name="replaced_components" placeholder="e.g. Replaced U4, R12">
+            </div>
+
+            <div class="form-group">
+                <label for="tech">7. Debug Technician Name / ID:</label>
+                <input type="text" id="tech" name="debug_technician" placeholder="e.g. Tech_01" required>
+            </div>
+
+            <div class="form-group">
+                <label for="notes">8. Detailed Action Taken & Root Cause Notes:</label>
+                <textarea id="notes" name="action_taken" rows="2" placeholder="Describe root cause and resolution..."></textarea>
+            </div>
+
+            <button type="submit">💾 Save Log & Calculate Metrics</button>
         </form>
     </div>
 
