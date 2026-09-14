@@ -140,12 +140,13 @@ HTML_TEMPLATE = '''
         <form action="/add" method="POST">
             <div class="grid">
                 <div>
-                    <label for="project">1. Project Number (e.g., 107, 108, 109):</label>
-                    <input type="text" id="project" name="project_number" placeholder="e.g. 107" required>
+                    <label for="project">1. Project Number (e.g., EN107682, EN108148):</label>
+                    <input type="text" id="project" name="project_number" placeholder="e.g. EN107685" required>
                 </div>
                 <div>
+                <div>
                     <label for="sn">2. Board Serial Number (Scan Barcode):</label>
-                    <input type="text" id="sn" name="serial_number" placeholder="Scan unit SN..." autofocus required>
+                    <input type="text" id="sn" name="serial_number" placeholder="e.g., SN408123" pattern="SN\d{6}" title="Serial number must start with 'SN' followed by 6 digits (e.g., SN408123)" autofocus required>
                 </div>
                 <div>
                     <label for="error_code">3. Initial Failure / Error Code:</label>
@@ -215,7 +216,7 @@ HTML_TEMPLATE = '''
                 {% for row in logs %}
                 <tr>
                     <td>{{ row[3] }}</td>
-                    <td><span class="proj-badge">Project {{ row[1] }}</span></td>
+                    <td><span class="proj-badge">{{ row[1] }}</span></td>
                     <td><strong>{{ row[2] }}</strong></td>
                     <td>{{ row[4] }}</td>
                     <td>{{ row[5] }}</td>
