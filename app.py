@@ -86,7 +86,8 @@ HTML_TEMPLATE = '''
         button { background-color: #102C57; color: white; border: none; padding: 10px 20px; font-size: 15px; font-weight: bold; border-radius: 4px; cursor: pointer; width: 100%; }
         button:hover { background-color: #0b1f3f; }
         
-        .btn-export { background-color: #28a745; width: auto; float: right; padding: 8px 15px; font-size: 14px; }
+        .btn-export { background-color: #28a745; width: auto; float: right; padding: 8px 15px; font-size: 14px; text-decoration: none; color: white; border-radius: 4px; font-weight: bold; }
+        .btn-clear { background-color: #dc3545; width: auto; float: right; padding: 8px 15px; font-size: 14px; text-decoration: none; color: white; border-radius: 4px; font-weight: bold; margin-right: 10px; }
         
         .stats { display: flex; justify-content: space-between; margin-bottom: 20px; gap: 10px; }
         .stat-box { background: white; padding: 15px; border-radius: 6px; text-align: center; flex: 1; box-shadow: 0 1px 5px rgba(0,0,0,0.05); }
@@ -110,7 +111,8 @@ HTML_TEMPLATE = '''
 <div class="container">
     <div style="overflow: hidden; margin-bottom: 10px;">
         <h2 style="float: left;">SAI50 Program - Traceability & Yield Analytics</h2>
-        <a href="/export"><button class="btn-export">📊 Export Full Excel Analytics</button></a>
+        <a href="/export" class="btn-export">📊 Export Full Excel Analytics</a>
+        <a href="/clear_test_data" class="btn-clear" onclick="return confirm('Are you sure you want to delete all log entries and reset IDs to 1?');">🗑️ Clear Trial Data</a>
     </div>
 
     <!-- Filter Bar -->
@@ -167,7 +169,7 @@ HTML_TEMPLATE = '''
     <div class="card" style="padding: 15px; background: #f0f4f8;">
         <h4 style="margin-bottom: 10px;">⚙️ Update Project Batch Size</h4>
         <form action="/set_batch" method="POST" style="display: flex; gap: 10px; align-items: center;">
-            <input type="text" name="project_number" placeholder="Project # (e.g. 707577, 10765)" value="{{ selected_project if selected_project != 'ALL' else '' }}" required style="flex: 1;">
+            <input type="text" name="project_number" placeholder="Project # (e.g. EN107577)" value="{{ selected_project if selected_project != 'ALL' else '' }}" required style="flex: 1;">
             <input type="number" name="batch_size" placeholder="Total Planned Boards (e.g. 400)" value="{{ target_batch_size if target_batch_size > 0 else '' }}" required style="flex: 1;">
             <button type="submit" style="width: auto;">Save Batch Size</button>
         </form>
@@ -193,7 +195,7 @@ HTML_TEMPLATE = '''
         <form action="/add" method="POST">
             <div class="grid">
                 <div>
-                    <label for="project">1. Project Number (e.g., 707577, 10765):</label>
+                    <label for="project">1. Project Number (e.g., EN107577):</label>
                     <input type="text" id="project" name="project_number" placeholder="e.g. 707577" value="{{ selected_project if selected_project != 'ALL' else '' }}" required>
                 </div>
 
@@ -262,6 +264,7 @@ HTML_TEMPLATE = '''
         <table>
             <thead>
                 <tr>
+                    <th>ID</th>
                     <th>Timestamp</th>
                     <th>Project #</th>
                     <th>Serial Number</th>
@@ -275,6 +278,7 @@ HTML_TEMPLATE = '''
             <tbody>
                 {% for row in logs %}
                 <tr>
+                    <td><strong>#{{ row[0] }}</strong></td>
                     <td>{{ row[3] }}</td>
                     <td><span class="proj-badge">{{ row[1] }}</span></td>
                     <td><strong>{{ row[2] }}</strong></td>
@@ -313,14 +317,12 @@ def index():
 
     p = "%s" if DB_URL else "?"
     
-    # 1. Fetch recent activity audit log
     where_clause = f" WHERE project_number = {p}" if selected_project != 'ALL' else ""
     params = [selected_project] if selected_project != 'ALL' else []
     
     cursor.execute(f"SELECT * FROM debug_logs{where_clause} ORDER BY id DESC LIMIT 15", params)
     logs = cursor.fetchall()
 
-    # 2. Build subquery for UNIQUE serial numbers (using latest log entry per board)
     if selected_project != 'ALL':
         latest_boards_query = f"""
             FROM debug_logs d
@@ -343,27 +345,21 @@ def index():
         """
         sub_params = []
 
-    # Total UNIQUE defective units logged
     cursor.execute(f"SELECT COUNT(*) {latest_boards_query}", sub_params)
     total_unique = cursor.fetchone()[0] or 0
 
-    # Retest Pass (latest status)
     cursor.execute(f"SELECT COUNT(*) {latest_boards_query} WHERE d.action_type = 'Direct Retest (No Repair)' AND d.final_status = 'PASSED'", sub_params)
     retest_only = cursor.fetchone()[0] or 0
 
-    # Repaired & Passed (latest status)
     cursor.execute(f"SELECT COUNT(*) {latest_boards_query} WHERE d.action_type != 'Direct Retest (No Repair)' AND d.final_status = 'PASSED'", sub_params)
     repaired = cursor.fetchone()[0] or 0
 
-    # Scrapped / Failed (latest status)
     cursor.execute(f"SELECT COUNT(*) {latest_boards_query} WHERE d.final_status IN ('SCRAPPED', 'FAILED')", sub_params)
     scrapped = cursor.fetchone()[0] or 0
 
-    # Failure code distribution on latest board states
     cursor.execute(f"SELECT d.error_code, COUNT(*) {latest_boards_query} GROUP BY d.error_code", sub_params)
     err_counts = dict(cursor.fetchall())
 
-    # Get target batch size
     if selected_project != 'ALL':
         cursor.execute(f"SELECT batch_size FROM project_batches WHERE project_number = {p}", [selected_project])
         batch_row = cursor.fetchone()
@@ -443,12 +439,26 @@ def add_log():
 
     return redirect(url_for('index', filter_project=project_number))
 
+@app.route('/clear_test_data')
+def clear_test_data():
+    conn = get_db()
+    cursor = conn.cursor()
+    
+    if DB_URL:
+        cursor.execute("TRUNCATE TABLE debug_logs RESTART IDENTITY;")
+    else:
+        cursor.execute("DELETE FROM debug_logs;")
+        cursor.execute("DELETE FROM sqlite_sequence WHERE name='debug_logs';")
+        
+    conn.commit()
+    conn.close()
+    return redirect(url_for('index'))
+
 @app.route('/export')
 def export():
     conn = get_db()
     df_logs = pd.read_sql_query("SELECT * FROM debug_logs ORDER BY id DESC", conn)
     
-    # Generate unique unit view (latest state per board)
     latest_query = """
         SELECT d.* FROM debug_logs d
         INNER JOIN (
