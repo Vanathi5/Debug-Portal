@@ -7,13 +7,10 @@ import os
 
 app = Flask(__name__)
 
-# Fetch database connection URL from Render environment variable
 DB_URL = os.environ.get('DATABASE_URL')
 
 def get_db():
-    """Dynamically connects to PostgreSQL on Render or SQLite locally."""
     if DB_URL:
-        # Render provides 'postgres://', psycopg2 requires 'postgresql://'
         url = DB_URL.replace("postgres://", "postgresql://", 1) if DB_URL.startswith("postgres://") else DB_URL
         return psycopg2.connect(url)
     return sqlite3.connect("debug_traceability.db")
@@ -23,7 +20,6 @@ def init_db():
     cursor = conn.cursor()
     
     if DB_URL:
-        # PostgreSQL syntax
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS debug_logs (
                 id SERIAL PRIMARY KEY,
@@ -38,8 +34,13 @@ def init_db():
                 final_status TEXT NOT NULL
             )
         ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS project_batches (
+                project_number TEXT PRIMARY KEY,
+                batch_size INTEGER NOT NULL
+            )
+        ''')
     else:
-        # SQLite syntax
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS debug_logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -54,6 +55,12 @@ def init_db():
                 final_status TEXT NOT NULL
             )
         ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS project_batches (
+                project_number TEXT PRIMARY KEY,
+                batch_size INTEGER NOT NULL
+            )
+        ''')
     conn.commit()
     conn.close()
 
@@ -63,28 +70,30 @@ HTML_TEMPLATE = '''
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Production Traceability & Failure Analytics</title>
+    <title>SAI50 Traceability & Yield Analytics</title>
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 20px; background-color: #f4f6f9; }
         .container { max-width: 1150px; margin: 0 auto; }
         .card { background: white; padding: 25px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); margin-bottom: 20px; }
-        h2 { margin-top: 0; color: #102C57; }
+        h2, h3, h4 { color: #102C57; margin-top: 0; }
         
-        /* Horizontal Grid Form Layout */
         .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; }
         .full-width { grid-column: span 3; }
         
         label { font-weight: bold; font-size: 0.85em; color: #333; display: block; margin-bottom: 5px; }
         input, select, textarea { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-size: 14px; }
         
-        button { background-color: #102C57; color: white; border: none; padding: 12px 20px; font-size: 16px; font-weight: bold; border-radius: 4px; cursor: pointer; width: 100%; }
+        button { background-color: #102C57; color: white; border: none; padding: 10px 20px; font-size: 15px; font-weight: bold; border-radius: 4px; cursor: pointer; width: 100%; }
         button:hover { background-color: #0b1f3f; }
         
         .btn-export { background-color: #28a745; width: auto; float: right; padding: 8px 15px; font-size: 14px; }
-        .stats { display: flex; justify-content: space-between; margin-bottom: 20px; }
-        .stat-box { background: white; padding: 15px; border-radius: 6px; text-align: center; flex: 1; margin: 0 5px; box-shadow: 0 1px 5px rgba(0,0,0,0.05); }
+        
+        .stats { display: flex; justify-content: space-between; margin-bottom: 20px; gap: 10px; }
+        .stat-box { background: white; padding: 15px; border-radius: 6px; text-align: center; flex: 1; box-shadow: 0 1px 5px rgba(0,0,0,0.05); }
         .stat-number { font-size: 22px; font-weight: bold; color: #102C57; }
         .stat-pct { font-size: 13px; color: #666; font-weight: normal; margin-top: 4px; }
+        
+        .filter-bar { background: #e9ecef; padding: 15px; border-radius: 6px; margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between; }
         
         table { width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 13px; }
         th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
@@ -100,37 +109,73 @@ HTML_TEMPLATE = '''
 <body>
 <div class="container">
     <div style="overflow: hidden; margin-bottom: 10px;">
-        <h2 style="float: left;">Traceability & Failure Analysis Portal</h2>
+        <h2 style="float: left;">SAI50 Program - Traceability & Yield Analytics</h2>
         <a href="/export"><button class="btn-export">📊 Export Full Excel Analytics</button></a>
     </div>
 
-    <!-- Live Percentage Dashboard -->
+    <!-- Filter Bar -->
+    <div class="filter-bar">
+        <form method="GET" action="/" style="display: flex; gap: 15px; align-items: center; width: 100%;">
+            <label style="margin: 0; white-space: nowrap; font-size: 1rem;">🔍 <strong>Dashboard by Project:</strong></label>
+            <select name="filter_project" onchange="this.form.submit()" style="max-width: 250px;">
+                <option value="ALL" {% if selected_project == 'ALL' %}selected{% endif %}>-- All Projects Combined --</option>
+                {% for proj in available_projects %}
+                <option value="{{ proj }}" {% if selected_project == proj %}selected{% endif %}>Project {{ proj }}</option>
+                {% endfor %}
+            </select>
+            {% if selected_project != 'ALL' %}
+            <a href="/" style="font-size: 13px; color: #007bff; text-decoration: none;">Clear Filter</a>
+            {% endif %}
+        </form>
+    </div>
+
+    <!-- Dashboard Metrics -->
     <div class="stats">
+        <div class="stat-box">
+            <div class="stat-number">{{ target_batch_size }}</div>
+            <div>Planned Batch Size</div>
+            <div class="stat-pct">Total Target Boards</div>
+        </div>
         <div class="stat-box">
             <div class="stat-number">{{ stats['total'] }}</div>
             <div>Total Debugged</div>
-            <div class="stat-pct">100% of Logged Units</div>
+            <div class="stat-pct">Logged Defective Units</div>
         </div>
         <div class="stat-box">
             <div class="stat-number" style="color: #17a2b8;">{{ stats['retest_only'] }}</div>
-            <div>Direct Retest Passed</div>
-            <div class="stat-pct"><strong>{{ stats['retest_pct'] }}%</strong> of Total</div>
+            <div>Direct Retest Pass</div>
+            <div class="stat-pct"><strong>{{ stats['retest_pct'] }}%</strong> of Debug</div>
         </div>
         <div class="stat-box">
             <div class="stat-number" style="color: #28a745;">{{ stats['repaired'] }}</div>
             <div>Repaired & Passed</div>
-            <div class="stat-pct"><strong>{{ stats['repaired_pct'] }}%</strong> of Total</div>
+            <div class="stat-pct"><strong>{{ stats['repaired_pct'] }}%</strong> of Debug</div>
         </div>
         <div class="stat-box">
             <div class="stat-number" style="color: #dc3545;">{{ stats['scrapped'] }}</div>
             <div>Scrapped / Failed</div>
-            <div class="stat-pct"><strong>{{ stats['scrapped_pct'] }}%</strong> of Total</div>
+            <div class="stat-pct"><strong>{{ stats['scrapped_pct'] }}%</strong> of Debug</div>
         </div>
+        <div class="stat-box" style="border: 2px solid #28a745;">
+            <div class="stat-number" style="color: #28a745;">{{ overall_yield }}%</div>
+            <div>True Production Yield</div>
+            <div class="stat-pct">(Batch - Scrap) / Batch</div>
+        </div>
+    </div>
+
+    <!-- Update Project Batch Size -->
+    <div class="card" style="padding: 15px; background: #f0f4f8;">
+        <h4 style="margin-bottom: 10px;">⚙️ Update Project Batch Size</h4>
+        <form action="/set_batch" method="POST" style="display: flex; gap: 10px; align-items: center;">
+            <input type="text" name="project_number" placeholder="Project # (e.g. 707577, 10765)" value="{{ selected_project if selected_project != 'ALL' else '' }}" required style="flex: 1;">
+            <input type="number" name="batch_size" placeholder="Total Planned Boards (e.g. 400)" value="{{ target_batch_size if target_batch_size > 0 else '' }}" required style="flex: 1;">
+            <button type="submit" style="width: auto;">Save Batch Size</button>
+        </form>
     </div>
 
     <!-- Failure Type Breakdown Cards -->
     <div class="card" style="padding: 15px;">
-        <h4 style="margin-top:0; color:#102C57;">Initial Failure Breakdown (%)</h4>
+        <h4 style="margin-top:0;">Initial Failure Breakdown (%)</h4>
         <div style="display: flex; gap: 10px; font-size: 13px; flex-wrap: wrap;">
             {% for code, count in err_counts.items() %}
             <div style="background: #f0f4f8; padding: 8px 12px; border-radius: 5px; flex: 1; min-width: 120px; text-align: center;">
@@ -144,16 +189,17 @@ HTML_TEMPLATE = '''
 
     <!-- Horizontal Entry Form -->
     <div class="card">
+        <h3>Log Board Failure / Retest Entry</h3>
         <form action="/add" method="POST">
             <div class="grid">
                 <div>
-                    <label for="project">1. Project Number (e.g., EN107682, EN108148):</label>
-                    <input type="text" id="project" name="project_number" placeholder="e.g. EN107685" required>
+                    <label for="project">1. Project Number (e.g., 707577, 10765):</label>
+                    <input type="text" id="project" name="project_number" placeholder="e.g. 707577" value="{{ selected_project if selected_project != 'ALL' else '' }}" required>
                 </div>
 
                 <div>
                     <label for="sn">2. Board Serial Number (Scan Barcode):</label>
-                    <input type="text" id="sn" name="serial_number" placeholder="e.g., SN408123" pattern="SN\d{6}" title="Serial number must start with 'SN' followed by 6 digits (e.g., SN408123)" autofocus required>
+                    <input type="text" id="sn" name="serial_number" placeholder="e.g., SN408123" pattern="SN\d{6}" title="Serial number must start with 'SN' followed by 6 digits" autofocus required>
                 </div>
 
                 <div>
@@ -212,7 +258,7 @@ HTML_TEMPLATE = '''
 
     <!-- Recent Activity Table -->
     <div class="card">
-        <h3>Recent Debug Activity</h3>
+        <h3>Recent Debug Activity {% if selected_project != 'ALL' %}(Project {{ selected_project }}){% endif %}</h3>
         <table>
             <thead>
                 <tr>
@@ -257,42 +303,94 @@ HTML_TEMPLATE = '''
 
 @app.route('/')
 def index():
+    selected_project = request.args.get('filter_project', 'ALL').strip()
+
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM debug_logs ORDER BY id DESC LIMIT 15")
+
+    cursor.execute("SELECT DISTINCT project_number FROM debug_logs UNION SELECT project_number FROM project_batches")
+    available_projects = [row[0] for row in cursor.fetchall() if row[0]]
+
+    p = "%s" if DB_URL else "?"
+    where_clause = ""
+    params = []
+    if selected_project != 'ALL':
+        where_clause = f" WHERE project_number = {p}"
+        params = [selected_project]
+
+    cursor.execute(f"SELECT * FROM debug_logs{where_clause} ORDER BY id DESC LIMIT 15", params)
     logs = cursor.fetchall()
 
-    cursor.execute("SELECT COUNT(*) FROM debug_logs")
-    total = cursor.fetchone()[0] or 1  # Avoid div by zero
+    cursor.execute(f"SELECT COUNT(*) FROM debug_logs{where_clause}", params)
+    total = cursor.fetchone()[0] or 0
 
-    cursor.execute("SELECT COUNT(*) FROM debug_logs WHERE action_type = 'Direct Retest (No Repair)' AND final_status = 'PASSED'")
+    retest_query = f"SELECT COUNT(*) FROM debug_logs WHERE action_type = 'Direct Retest (No Repair)' AND final_status = 'PASSED'" + (f" AND project_number = {p}" if selected_project != 'ALL' else "")
+    cursor.execute(retest_query, params if selected_project != 'ALL' else [])
     retest_only = cursor.fetchone()[0]
-    
-    cursor.execute("SELECT COUNT(*) FROM debug_logs WHERE action_type != 'Direct Retest (No Repair)' AND final_status = 'PASSED'")
+
+    repaired_query = f"SELECT COUNT(*) FROM debug_logs WHERE action_type != 'Direct Retest (No Repair)' AND final_status = 'PASSED'" + (f" AND project_number = {p}" if selected_project != 'ALL' else "")
+    cursor.execute(repaired_query, params if selected_project != 'ALL' else [])
     repaired = cursor.fetchone()[0]
-    
-    cursor.execute("SELECT COUNT(*) FROM debug_logs WHERE final_status IN ('SCRAPPED', 'FAILED')")
+
+    scrapped_query = f"SELECT COUNT(*) FROM debug_logs WHERE final_status IN ('SCRAPPED', 'FAILED')" + (f" AND project_number = {p}" if selected_project != 'ALL' else "")
+    cursor.execute(scrapped_query, params if selected_project != 'ALL' else [])
     scrapped = cursor.fetchone()[0]
 
-    # Failure counts
-    cursor.execute("SELECT error_code, COUNT(*) FROM debug_logs GROUP BY error_code")
+    err_query = f"SELECT error_code, COUNT(*) FROM debug_logs{where_clause} GROUP BY error_code"
+    cursor.execute(err_query, params)
     err_counts = dict(cursor.fetchall())
+
+    if selected_project != 'ALL':
+        cursor.execute(f"SELECT batch_size FROM project_batches WHERE project_number = {p}", [selected_project])
+        batch_row = cursor.fetchone()
+        target_batch_size = batch_row[0] if batch_row else 0
+    else:
+        cursor.execute("SELECT SUM(batch_size) FROM project_batches")
+        batch_sum = cursor.fetchone()[0]
+        target_batch_size = batch_sum if batch_sum else 0
 
     conn.close()
 
-    actual_total = total if total > 1 or len(logs) > 0 else 0
+    overall_yield = round(((target_batch_size - scrapped) / target_batch_size) * 100, 2) if target_batch_size > 0 else 00.0
 
     stats = {
-        'total': actual_total,
+        'total': total,
         'retest_only': retest_only,
-        'retest_pct': round((retest_only / actual_total) * 100, 1) if actual_total > 0 else 0,
+        'retest_pct': round((retest_only / total) * 100, 1) if total > 0 else 0,
         'repaired': repaired,
-        'repaired_pct': round((repaired / actual_total) * 100, 1) if actual_total > 0 else 0,
+        'repaired_pct': round((repaired / total) * 100, 1) if total > 0 else 0,
         'scrapped': scrapped,
-        'scrapped_pct': round((scrapped / actual_total) * 100, 1) if actual_total > 0 else 0,
+        'scrapped_pct': round((scrapped / total) * 100, 1) if total > 0 else 0,
     }
 
-    return render_template_string(HTML_TEMPLATE, logs=logs, stats=stats, err_counts=err_counts)
+    return render_template_string(
+        HTML_TEMPLATE, 
+        logs=logs, 
+        stats=stats, 
+        err_counts=err_counts, 
+        available_projects=available_projects, 
+        selected_project=selected_project,
+        target_batch_size=target_batch_size,
+        overall_yield=overall_yield
+    )
+
+@app.route('/set_batch', methods=['POST'])
+def set_batch():
+    project_number = request.form['project_number'].strip()
+    batch_size = int(request.form['batch_size'])
+
+    conn = get_db()
+    cursor = conn.cursor()
+    p = "%s" if DB_URL else "?"
+    
+    if DB_URL:
+        cursor.execute(f"INSERT INTO project_batches (project_number, batch_size) VALUES ({p}, {p}) ON CONFLICT (project_number) DO UPDATE SET batch_size = EXCLUDED.batch_size", (project_number, batch_size))
+    else:
+        cursor.execute(f"INSERT OR REPLACE INTO project_batches (project_number, batch_size) VALUES ({p}, {p})", (project_number, batch_size))
+        
+    conn.commit()
+    conn.close()
+    return redirect(url_for('index', filter_project=project_number))
 
 @app.route('/add', methods=['POST'])
 def add_log():
@@ -308,8 +406,6 @@ def add_log():
 
     conn = get_db()
     cursor = conn.cursor()
-    
-    # Use %s for PostgreSQL (Render/Neon) and ? for local SQLite
     p = "%s" if DB_URL else "?"
     
     query = f'''
@@ -321,29 +417,24 @@ def add_log():
     conn.commit()
     conn.close()
 
-    return redirect(url_for('index'))
+    return redirect(url_for('index', filter_project=project_number))
 
 @app.route('/export')
 def export():
     conn = get_db()
-    df = pd.read_sql_query("SELECT * FROM debug_logs", conn)
+    df_logs = pd.read_sql_query("SELECT * FROM debug_logs", conn)
+    df_batches = pd.read_sql_query("SELECT * FROM project_batches", conn)
     conn.close()
 
     export_path = "Debug_Traceability_Analytics.xlsx"
 
     with pd.ExcelWriter(export_path, engine='openpyxl') as writer:
-        # Sheet 1: Detailed Logs
-        df.to_excel(writer, sheet_name='All Units Log', index=False)
+        df_logs.to_excel(writer, sheet_name='All Units Log', index=False)
+        df_batches.to_excel(writer, sheet_name='Project Batch Sizes', index=False)
 
-        # Sheet 2: Resolution Breakdown (Initial Failure vs How Solved)
-        if not df.empty and 'error_code' in df.columns and 'action_type' in df.columns:
-            pivot_table = pd.crosstab(df['error_code'], df['action_type'], margins=True, margins_name='Total')
+        if not df_logs.empty and 'error_code' in df_logs.columns and 'action_type' in df_logs.columns:
+            pivot_table = pd.crosstab(df_logs['error_code'], df_logs['action_type'], margins=True, margins_name='Total')
             pivot_table.to_excel(writer, sheet_name='Failure vs Resolution Summary')
-
-        # Sheet 3: Percentage Summary
-        if not df.empty and 'project_number' in df.columns and 'final_status' in df.columns:
-            stats_summary = df.groupby(['project_number', 'final_status']).size().unstack(fill_value=0)
-            stats_summary.to_excel(writer, sheet_name='Project Yield Summary')
 
     return send_file(export_path, as_attachment=True)
 
