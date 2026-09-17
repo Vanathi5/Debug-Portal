@@ -112,7 +112,9 @@ HTML_TEMPLATE = '''
     <div style="overflow: hidden; margin-bottom: 10px;">
         <h2 style="float: left;">SAI50 Program - Traceability & Yield Analytics</h2>
         <a href="/export" class="btn-export">📊 Export Full Excel Analytics</a>
+        <!-- Hidden for production
         <a href="/clear_test_data" class="btn-clear" onclick="return confirm('Are you sure you want to delete all log entries and reset IDs to 1?');">🗑️ Clear Trial Data</a>
+        -->
     </div>
 
     <!-- Filter Bar -->
@@ -438,7 +440,8 @@ def add_log():
     conn.close()
 
     return redirect(url_for('index', filter_project=project_number))
-
+'''
+#Hidden for Production
 @app.route('/clear_test_data')
 def clear_test_data():
     conn = get_db()
@@ -453,7 +456,7 @@ def clear_test_data():
     conn.commit()
     conn.close()
     return redirect(url_for('index'))
-
+'''
 @app.route('/export')
 def export():
     conn = get_db()
