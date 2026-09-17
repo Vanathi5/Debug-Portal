@@ -139,7 +139,7 @@ HTML_TEMPLATE = '''
         <div class="stat-box">
             <div class="stat-number">{{ stats['total'] }}</div>
             <div>Total Debugged</div>
-            <div class="stat-pct">Logged Defective Units</div>
+            <div class="stat-pct">Unique Defective Boards</div>
         </div>
         <div class="stat-box">
             <div class="stat-number" style="color: #17a2b8;">{{ stats['retest_only'] }}</div>
@@ -301,7 +301,6 @@ HTML_TEMPLATE = '''
 </html>
 '''
 
-# FIX APPLIED: Added methods=['GET', 'POST'] to allow both page requests and form submissions
 @app.route('/', methods=['GET', 'POST'])
 def index():
     selected_project = request.args.get('filter_project', 'ALL').strip()
@@ -313,34 +312,58 @@ def index():
     available_projects = [row[0] for row in cursor.fetchall() if row[0]]
 
     p = "%s" if DB_URL else "?"
-    where_clause = ""
-    params = []
-    if selected_project != 'ALL':
-        where_clause = f" WHERE project_number = {p}"
-        params = [selected_project]
-
+    
+    # 1. Fetch recent activity audit log
+    where_clause = f" WHERE project_number = {p}" if selected_project != 'ALL' else ""
+    params = [selected_project] if selected_project != 'ALL' else []
+    
     cursor.execute(f"SELECT * FROM debug_logs{where_clause} ORDER BY id DESC LIMIT 15", params)
     logs = cursor.fetchall()
 
-    cursor.execute(f"SELECT COUNT(*) FROM debug_logs{where_clause}", params)
-    total = cursor.fetchone()[0] or 0
+    # 2. Build subquery for UNIQUE serial numbers (using latest log entry per board)
+    if selected_project != 'ALL':
+        latest_boards_query = f"""
+            FROM debug_logs d
+            INNER JOIN (
+                SELECT serial_number, MAX(id) as max_id 
+                FROM debug_logs 
+                WHERE project_number = {p}
+                GROUP BY serial_number
+            ) latest ON d.id = latest.max_id
+        """
+        sub_params = [selected_project]
+    else:
+        latest_boards_query = """
+            FROM debug_logs d
+            INNER JOIN (
+                SELECT serial_number, MAX(id) as max_id 
+                FROM debug_logs 
+                GROUP BY serial_number
+            ) latest ON d.id = latest.max_id
+        """
+        sub_params = []
 
-    retest_query = f"SELECT COUNT(*) FROM debug_logs WHERE action_type = 'Direct Retest (No Repair)' AND final_status = 'PASSED'" + (f" AND project_number = {p}" if selected_project != 'ALL' else "")
-    cursor.execute(retest_query, params if selected_project != 'ALL' else [])
-    retest_only = cursor.fetchone()[0]
+    # Total UNIQUE defective units logged
+    cursor.execute(f"SELECT COUNT(*) {latest_boards_query}", sub_params)
+    total_unique = cursor.fetchone()[0] or 0
 
-    repaired_query = f"SELECT COUNT(*) FROM debug_logs WHERE action_type != 'Direct Retest (No Repair)' AND final_status = 'PASSED'" + (f" AND project_number = {p}" if selected_project != 'ALL' else "")
-    cursor.execute(repaired_query, params if selected_project != 'ALL' else [])
-    repaired = cursor.fetchone()[0]
+    # Retest Pass (latest status)
+    cursor.execute(f"SELECT COUNT(*) {latest_boards_query} WHERE d.action_type = 'Direct Retest (No Repair)' AND d.final_status = 'PASSED'", sub_params)
+    retest_only = cursor.fetchone()[0] or 0
 
-    scrapped_query = f"SELECT COUNT(*) FROM debug_logs WHERE final_status IN ('SCRAPPED', 'FAILED')" + (f" AND project_number = {p}" if selected_project != 'ALL' else "")
-    cursor.execute(scrapped_query, params if selected_project != 'ALL' else [])
-    scrapped = cursor.fetchone()[0]
+    # Repaired & Passed (latest status)
+    cursor.execute(f"SELECT COUNT(*) {latest_boards_query} WHERE d.action_type != 'Direct Retest (No Repair)' AND d.final_status = 'PASSED'", sub_params)
+    repaired = cursor.fetchone()[0] or 0
 
-    err_query = f"SELECT error_code, COUNT(*) FROM debug_logs{where_clause} GROUP BY error_code"
-    cursor.execute(err_query, params)
+    # Scrapped / Failed (latest status)
+    cursor.execute(f"SELECT COUNT(*) {latest_boards_query} WHERE d.final_status IN ('SCRAPPED', 'FAILED')", sub_params)
+    scrapped = cursor.fetchone()[0] or 0
+
+    # Failure code distribution on latest board states
+    cursor.execute(f"SELECT d.error_code, COUNT(*) {latest_boards_query} GROUP BY d.error_code", sub_params)
     err_counts = dict(cursor.fetchall())
 
+    # Get target batch size
     if selected_project != 'ALL':
         cursor.execute(f"SELECT batch_size FROM project_batches WHERE project_number = {p}", [selected_project])
         batch_row = cursor.fetchone()
@@ -355,13 +378,13 @@ def index():
     overall_yield = round(((target_batch_size - scrapped) / target_batch_size) * 100, 2) if target_batch_size > 0 else 00.0
 
     stats = {
-        'total': total,
+        'total': total_unique,
         'retest_only': retest_only,
-        'retest_pct': round((retest_only / total) * 100, 1) if total > 0 else 0,
+        'retest_pct': round((retest_only / total_unique) * 100, 1) if total_unique > 0 else 0,
         'repaired': repaired,
-        'repaired_pct': round((repaired / total) * 100, 1) if total > 0 else 0,
+        'repaired_pct': round((repaired / total_unique) * 100, 1) if total_unique > 0 else 0,
         'scrapped': scrapped,
-        'scrapped_pct': round((scrapped / total) * 100, 1) if total > 0 else 0,
+        'scrapped_pct': round((scrapped / total_unique) * 100, 1) if total_unique > 0 else 0,
     }
 
     return render_template_string(
@@ -423,18 +446,31 @@ def add_log():
 @app.route('/export')
 def export():
     conn = get_db()
-    df_logs = pd.read_sql_query("SELECT * FROM debug_logs", conn)
+    df_logs = pd.read_sql_query("SELECT * FROM debug_logs ORDER BY id DESC", conn)
+    
+    # Generate unique unit view (latest state per board)
+    latest_query = """
+        SELECT d.* FROM debug_logs d
+        INNER JOIN (
+            SELECT serial_number, MAX(id) as max_id 
+            FROM debug_logs 
+            GROUP BY serial_number
+        ) latest ON d.id = latest.max_id
+        ORDER BY d.id DESC
+    """
+    df_unique = pd.read_sql_query(latest_query, conn)
     df_batches = pd.read_sql_query("SELECT * FROM project_batches", conn)
     conn.close()
 
     export_path = "Debug_Traceability_Analytics.xlsx"
 
     with pd.ExcelWriter(export_path, engine='openpyxl') as writer:
-        df_logs.to_excel(writer, sheet_name='All Units Log', index=False)
+        df_unique.to_excel(writer, sheet_name='Unique Boards Latest Status', index=False)
+        df_logs.to_excel(writer, sheet_name='Full Retest Audit Trail', index=False)
         df_batches.to_excel(writer, sheet_name='Project Batch Sizes', index=False)
 
-        if not df_logs.empty and 'error_code' in df_logs.columns and 'action_type' in df_logs.columns:
-            pivot_table = pd.crosstab(df_logs['error_code'], df_logs['action_type'], margins=True, margins_name='Total')
+        if not df_unique.empty and 'error_code' in df_unique.columns and 'action_type' in df_unique.columns:
+            pivot_table = pd.crosstab(df_unique['error_code'], df_unique['action_type'], margins=True, margins_name='Total')
             pivot_table.to_excel(writer, sheet_name='Failure vs Resolution Summary')
 
     return send_file(export_path, as_attachment=True)
