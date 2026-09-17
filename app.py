@@ -301,7 +301,8 @@ HTML_TEMPLATE = '''
 </html>
 '''
 
-@app.route('/')
+# FIX APPLIED: Added methods=['GET', 'POST'] to allow both page requests and form submissions
+@app.route('/', methods=['GET', 'POST'])
 def index():
     selected_project = request.args.get('filter_project', 'ALL').strip()
 
