@@ -445,5 +445,15 @@ def export():
 
     return send_file(export_path, as_attachment=True)
 
+@app.route('/reset_database_fresh', methods=['GET', 'POST'])
+def reset_database_fresh():
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("TRUNCATE TABLE debug_logs;")
+    cursor.execute("TRUNCATE TABLE project_batches;")
+    conn.commit()
+    conn.close()
+    return "<h1>Database successfully wiped! The system is 100% fresh for production.</h1><br><a href='/'>Go back to Dashboard</a>"
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
