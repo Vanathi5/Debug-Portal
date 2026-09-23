@@ -449,11 +449,21 @@ def export():
 def reset_database_fresh():
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("TRUNCATE TABLE debug_logs;")
-    cursor.execute("TRUNCATE TABLE project_batches;")
-    conn.commit()
-    conn.close()
-    return "<h1>Database successfully wiped! The system is 100% fresh for production.</h1><br><a href='/'>Go back to Dashboard</a>"
+    try:
+        if DB_URL:
+            # PostgreSQL command to force drop all data
+            cursor.execute("TRUNCATE TABLE debug_logs, project_batches RESTART IDENTITY CASCADE;")
+        else:
+            # SQLite fallback
+            cursor.execute("DELETE FROM debug_logs;")
+            cursor.execute("DELETE FROM project_batches;")
+        conn.commit()
+        return "<h1>Database successfully wiped with CASCADE!</h1><br><a href='/'>Go to Clean Dashboard</a>"
+    except Exception as e:
+        conn.rollback()
+        return f"<h1>Error wiping database:</h1><p>{str(e)}</p>"
+    finally:
+        conn.close()
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
