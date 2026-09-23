@@ -316,46 +316,35 @@ def index():
     p = "%s" if DB_URL else "?"
 
     if selected_project != 'ALL':
-        base_cte = f"""
-            WITH latest_logs AS (
-                SELECT d.*, ROW_NUMBER() OVER(PARTITION BY serial_number ORDER BY id DESC) as rn
-                FROM debug_logs d
-                WHERE project_number = {p}
-            )
-        """
-        params = [selected_project]
+        where_clause = f"WHERE project_number = {p} AND id IN (SELECT MAX(id) FROM debug_logs WHERE project_number = {p} GROUP BY serial_number)"
+        params = [selected_project, selected_project]
     else:
-        base_cte = """
-            WITH latest_logs AS (
-                SELECT d.*, ROW_NUMBER() OVER(PARTITION BY serial_number ORDER BY id DESC) as rn
-                FROM debug_logs d
-            )
-        """
+        where_clause = "WHERE id IN (SELECT MAX(id) FROM debug_logs GROUP BY serial_number)"
         params = []
 
     # 1. Fetch latest log entry per serial number for the table
-    logs_query = f"{base_cte} SELECT id, project_number, serial_number, timestamp, error_code, action_type, replaced_components, action_taken, debug_technician, final_status FROM latest_logs WHERE rn = 1 ORDER BY id DESC LIMIT 15"
+    logs_query = f"SELECT id, project_number, serial_number, timestamp, error_code, action_type, replaced_components, action_taken, debug_technician, final_status FROM debug_logs {where_clause} ORDER BY id DESC LIMIT 15"
     cursor.execute(logs_query, params)
     logs = cursor.fetchall()
 
     # 2. Count metrics strictly on latest board states
-    count_query = f"{base_cte} SELECT COUNT(*) FROM latest_logs WHERE rn = 1"
+    count_query = f"SELECT COUNT(*) FROM debug_logs {where_clause}"
     cursor.execute(count_query, params)
     total_unique = cursor.fetchone()[0] or 0
 
-    retest_query = f"{base_cte} SELECT COUNT(*) FROM latest_logs WHERE rn = 1 AND action_type LIKE 'Direct Retest%' AND final_status = 'PASSED'"
+    retest_query = f"SELECT COUNT(*) FROM debug_logs {where_clause} AND action_type LIKE 'Direct Retest%' AND final_status = 'PASSED'"
     cursor.execute(retest_query, params)
     retest_only = cursor.fetchone()[0] or 0
 
-    repaired_query = f"{base_cte} SELECT COUNT(*) FROM latest_logs WHERE rn = 1 AND action_type NOT LIKE 'Direct Retest%' AND final_status = 'PASSED'"
+    repaired_query = f"SELECT COUNT(*) FROM debug_logs {where_clause} AND action_type NOT LIKE 'Direct Retest%' AND final_status = 'PASSED'"
     cursor.execute(repaired_query, params)
     repaired = cursor.fetchone()[0] or 0
 
-    scrapped_query = f"{base_cte} SELECT COUNT(*) FROM latest_logs WHERE rn = 1 AND final_status IN ('SCRAPPED', 'FAILED')"
+    scrapped_query = f"SELECT COUNT(*) FROM debug_logs {where_clause} AND final_status IN ('SCRAPPED', 'FAILED')"
     cursor.execute(scrapped_query, params)
     scrapped = cursor.fetchone()[0] or 0
 
-    err_query = f"{base_cte} SELECT error_code, COUNT(*) FROM latest_logs WHERE rn = 1 GROUP BY error_code"
+    err_query = f"SELECT error_code, COUNT(*) FROM debug_logs {where_clause} GROUP BY error_code"
     cursor.execute(err_query, params)
     err_counts = dict(cursor.fetchall())
 
@@ -444,11 +433,9 @@ def export():
     df_logs = pd.read_sql_query("SELECT * FROM debug_logs ORDER BY id DESC", conn)
     
     latest_query = """
-        WITH latest_logs AS (
-            SELECT d.*, ROW_NUMBER() OVER(PARTITION BY serial_number ORDER BY id DESC) as rn
-            FROM debug_logs d
-        )
-        SELECT * FROM latest_logs WHERE rn = 1 ORDER BY id DESC
+        SELECT * FROM debug_logs 
+        WHERE id IN (SELECT MAX(id) FROM debug_logs GROUP BY serial_number)
+        ORDER BY id DESC
     """
     df_unique = pd.read_sql_query(latest_query, conn)
     df_batches = pd.read_sql_query("SELECT * FROM project_batches", conn)
