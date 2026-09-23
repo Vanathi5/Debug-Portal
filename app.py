@@ -213,7 +213,8 @@ HTML_TEMPLATE = '''
                         <option value="Configuration_Troot">Configuration_Troot</option>
                         <option value="Production Troot Programming">Production Troot Programming</option>
                         <option value="Linux Login Fail">Linux Login Fail</option>
-                        <option value="Extended eMMc Failure">Extended eMMc Failure(Ethernet Fail)</option>
+                        <option value="Extended eMMc Failure">Extended eMMc Failure</option>
+                        <option value="Extended eMMc Failure">Serial Communication(Error Connecting to USB1)</option>
                         <option value="No Power">No Power</option>
                         <option value="OTHER">OTHER (Specify in notes)</option>
                     </select>
@@ -222,9 +223,8 @@ HTML_TEMPLATE = '''
                 <div>
                     <label for="action_type">4. How Was It Solved? (Action Category):</label>
                     <select id="action_type" name="action_type" required>
-                        <option value="Direct Retest (No Repair)">Direct Retest (No Repair - Socket/Contact Issue)</option>
+                        <option value="Direct Retest">Direct Retest (No Repair - Retry_Commands)</option>
                         <option value="Rework / Component Replacement">Rework / Component Replacement</option>
-                        <option value="Reflow Soldering">Reflow / Solder Bridge Clean</option>
                         <option value="Scrap / Unrepairable">Scrap / Unrepairable</option>
                     </select>
                 </div>
