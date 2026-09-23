@@ -326,7 +326,7 @@ def index():
                 FROM debug_logs 
                 WHERE project_number = {p}
                 GROUP BY serial_number
-            ) latest ON d.id = latest.max_id
+            ) AS latest ON d.id = latest.max_id
             ORDER BY d.id DESC LIMIT 15
         """
         latest_boards_query = f"""
@@ -336,7 +336,7 @@ def index():
                 FROM debug_logs 
                 WHERE project_number = {p}
                 GROUP BY serial_number
-            ) latest ON d.id = latest.max_id
+            ) AS latest ON d.id = latest.max_id
         """
         sub_params = [selected_project]
     else:
@@ -346,7 +346,7 @@ def index():
                 SELECT serial_number, MAX(id) as max_id 
                 FROM debug_logs 
                 GROUP BY serial_number
-            ) latest ON d.id = latest.max_id
+            ) AS latest ON d.id = latest.max_id
             ORDER BY d.id DESC LIMIT 15
         """
         latest_boards_query = """
@@ -355,7 +355,7 @@ def index():
                 SELECT serial_number, MAX(id) as max_id 
                 FROM debug_logs 
                 GROUP BY serial_number
-            ) latest ON d.id = latest.max_id
+            ) AS latest ON d.id = latest.max_id
         """
         sub_params = []
 
@@ -468,7 +468,7 @@ def export():
             SELECT serial_number, MAX(id) as max_id 
             FROM debug_logs 
             GROUP BY serial_number
-        ) latest ON d.id = latest.max_id
+        ) AS latest ON d.id = latest.max_id
         ORDER BY d.id DESC
     """
     df_unique = pd.read_sql_query(latest_query, conn)
