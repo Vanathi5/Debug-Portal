@@ -322,9 +322,33 @@ def index():
     where_clause = f" WHERE project_number = {p}" if selected_project != 'ALL' else ""
     params = [selected_project] if selected_project != 'ALL' else []
     
-    cursor.execute(f"SELECT * FROM debug_logs{where_clause} ORDER BY id DESC LIMIT 15", params)
+    # --- OPTION 2: Fetch only the LATEST entry for each unique Serial Number ---
+    if selected_project != 'ALL':
+        logs_query = f"""
+            SELECT d.* FROM debug_logs d
+            INNER JOIN (
+                SELECT serial_number, MAX(id) as max_id 
+                FROM debug_logs 
+                WHERE project_number = {p}
+                GROUP BY serial_number
+            ) latest ON d.id = latest.max_id
+            ORDER BY d.id DESC LIMIT 15
+        """
+    else:
+        logs_query = """
+            SELECT d.* FROM debug_logs d
+            INNER JOIN (
+                SELECT serial_number, MAX(id) as max_id 
+                FROM debug_logs 
+                GROUP BY serial_number
+            ) latest ON d.id = latest.max_id
+            ORDER BY d.id DESC LIMIT 15
+        """
+        
+    cursor.execute(logs_query, params)
     logs = cursor.fetchall()
 
+    # Metrics queries
     if selected_project != 'ALL':
         latest_boards_query = f"""
             FROM debug_logs d
@@ -373,7 +397,7 @@ def index():
 
     conn.close()
 
-    overall_yield = round(((target_batch_size - scrapped) / target_batch_size) * 100, 2) if target_batch_size > 0 else 00.0
+    overall_yield = round(((target_batch_size - scrapped) / target_batch_size) * 100, 2) if target_batch_size > 0 else 0.0
 
     stats = {
         'total': total_unique,
@@ -395,7 +419,6 @@ def index():
         target_batch_size=target_batch_size,
         overall_yield=overall_yield
     )
-
 @app.route('/set_batch', methods=['POST'])
 def set_batch():
     project_number = request.form['project_number'].strip()
