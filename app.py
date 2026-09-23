@@ -138,23 +138,23 @@ HTML_TEMPLATE = '''
         </div>
         <div class="stat-box">
             <div class="stat-number">{{ stats['total'] }}</div>
-            <div>Total Debugged</div>
+            <div>Total Unique Boards</div>
             <div class="stat-pct">Unique Defective Boards</div>
         </div>
         <div class="stat-box">
             <div class="stat-number" style="color: #17a2b8;">{{ stats['retest_only'] }}</div>
             <div>Direct Retest Pass</div>
-            <div class="stat-pct"><strong>{{ stats['retest_pct'] }}%</strong> of Debug</div>
+            <div class="stat-pct"><strong>{{ stats['retest_pct'] }}%</strong> of Unique</div>
         </div>
         <div class="stat-box">
             <div class="stat-number" style="color: #28a745;">{{ stats['repaired'] }}</div>
             <div>Repaired & Passed</div>
-            <div class="stat-pct"><strong>{{ stats['repaired_pct'] }}%</strong> of Debug</div>
+            <div class="stat-pct"><strong>{{ stats['repaired_pct'] }}%</strong> of Unique</div>
         </div>
         <div class="stat-box">
             <div class="stat-number" style="color: #dc3545;">{{ stats['scrapped'] }}</div>
-            <div>Scrapped / Failed</div>
-            <div class="stat-pct"><strong>{{ stats['scrapped_pct'] }}%</strong> of Debug</div>
+            <div>Currently Failed/Scrapped</div>
+            <div class="stat-pct"><strong>{{ stats['scrapped_pct'] }}%</strong> of Unique</div>
         </div>
         <div class="stat-box" style="border: 2px solid #28a745;">
             <div class="stat-number" style="color: #28a745;">{{ overall_yield }}%</div>
@@ -175,7 +175,7 @@ HTML_TEMPLATE = '''
 
     <!-- Failure Type Breakdown Cards -->
     <div class="card" style="padding: 15px;">
-        <h4 style="margin-top:0;">Initial Failure Breakdown (%)</h4>
+        <h4 style="margin-top:0;">Initial Failure Breakdown (Latest per Board)</h4>
         <div style="display: flex; gap: 10px; font-size: 13px; flex-wrap: wrap;">
             {% for code, count in err_counts.items() %}
             <div style="background: #f0f4f8; padding: 8px 12px; border-radius: 5px; flex: 1; min-width: 120px; text-align: center;">
@@ -258,7 +258,7 @@ HTML_TEMPLATE = '''
 
     <!-- Recent Activity Table -->
     <div class="card">
-        <h3>Recent Debug Activity {% if selected_project != 'ALL' %}(Project {{ selected_project }}){% endif %}</h3>
+        <h3>Latest Status Per Serial Number {% if selected_project != 'ALL' %}(Project {{ selected_project }}){% endif %}</h3>
         <table>
             <thead>
                 <tr>
@@ -313,52 +313,57 @@ def index():
     cursor.execute("SELECT DISTINCT project_number FROM debug_logs UNION SELECT project_number FROM project_batches")
     available_projects = [row[0] for row in cursor.fetchall() if row[0]]
 
-    placeholder = "%s" if DB_URL else "?"
+    p = "%s" if DB_URL else "?"
 
     if selected_project != 'ALL':
-        logs_query = f"SELECT * FROM debug_logs WHERE project_number = {placeholder} ORDER BY id DESC LIMIT 15"
-        cursor.execute(logs_query, (selected_project,))
+        base_cte = f"""
+            WITH latest_logs AS (
+                SELECT d.*, ROW_NUMBER() OVER(PARTITION BY serial_number ORDER BY id DESC) as rn
+                FROM debug_logs d
+                WHERE project_number = {p}
+            )
+        """
+        params = [selected_project]
     else:
-        logs_query = "SELECT * FROM debug_logs ORDER BY id DESC LIMIT 15"
-        cursor.execute(logs_query)
-        
+        base_cte = """
+            WITH latest_logs AS (
+                SELECT d.*, ROW_NUMBER() OVER(PARTITION BY serial_number ORDER BY id DESC) as rn
+                FROM debug_logs d
+            )
+        """
+        params = []
+
+    # 1. Fetch latest log entry per serial number for the table
+    logs_query = f"{base_cte} SELECT id, project_number, serial_number, timestamp, error_code, action_type, replaced_components, action_taken, debug_technician, final_status FROM latest_logs WHERE rn = 1 ORDER BY id DESC LIMIT 15"
+    cursor.execute(logs_query, params)
     logs = cursor.fetchall()
 
+    # 2. Count metrics strictly on latest board states
+    count_query = f"{base_cte} SELECT COUNT(*) FROM latest_logs WHERE rn = 1"
+    cursor.execute(count_query, params)
+    total_unique = cursor.fetchone()[0] or 0
+
+    retest_query = f"{base_cte} SELECT COUNT(*) FROM latest_logs WHERE rn = 1 AND action_type LIKE 'Direct Retest%' AND final_status = 'PASSED'"
+    cursor.execute(retest_query, params)
+    retest_only = cursor.fetchone()[0] or 0
+
+    repaired_query = f"{base_cte} SELECT COUNT(*) FROM latest_logs WHERE rn = 1 AND action_type NOT LIKE 'Direct Retest%' AND final_status = 'PASSED'"
+    cursor.execute(repaired_query, params)
+    repaired = cursor.fetchone()[0] or 0
+
+    scrapped_query = f"{base_cte} SELECT COUNT(*) FROM latest_logs WHERE rn = 1 AND final_status IN ('SCRAPPED', 'FAILED')"
+    cursor.execute(scrapped_query, params)
+    scrapped = cursor.fetchone()[0] or 0
+
+    err_query = f"{base_cte} SELECT error_code, COUNT(*) FROM latest_logs WHERE rn = 1 GROUP BY error_code"
+    cursor.execute(err_query, params)
+    err_counts = dict(cursor.fetchall())
+
     if selected_project != 'ALL':
-        cursor.execute(f"SELECT COUNT(DISTINCT serial_number) FROM debug_logs WHERE project_number = {placeholder}", (selected_project,))
-        total_unique = cursor.fetchone()[0] or 0
-
-        cursor.execute(f"SELECT COUNT(DISTINCT serial_number) FROM debug_logs WHERE project_number = {placeholder} AND action_type LIKE 'Direct Retest%' AND final_status = 'PASSED'", (selected_project,))
-        retest_only = cursor.fetchone()[0] or 0
-
-        cursor.execute(f"SELECT COUNT(DISTINCT serial_number) FROM debug_logs WHERE project_number = {placeholder} AND action_type NOT LIKE 'Direct Retest%' AND final_status = 'PASSED'", (selected_project,))
-        repaired = cursor.fetchone()[0] or 0
-
-        cursor.execute(f"SELECT COUNT(DISTINCT serial_number) FROM debug_logs WHERE project_number = {placeholder} AND final_status IN ('SCRAPPED', 'FAILED')", (selected_project,))
-        scrapped = cursor.fetchone()[0] or 0
-
-        cursor.execute(f"SELECT error_code, COUNT(*) FROM debug_logs WHERE project_number = {placeholder} GROUP BY error_code", (selected_project,))
-        err_counts = dict(cursor.fetchall())
-
-        cursor.execute(f"SELECT batch_size FROM project_batches WHERE project_number = {placeholder}", (selected_project,))
+        cursor.execute(f"SELECT batch_size FROM project_batches WHERE project_number = {p}", [selected_project])
         batch_row = cursor.fetchone()
         target_batch_size = batch_row[0] if batch_row else 0
     else:
-        cursor.execute("SELECT COUNT(DISTINCT serial_number) FROM debug_logs")
-        total_unique = cursor.fetchone()[0] or 0
-
-        cursor.execute("SELECT COUNT(DISTINCT serial_number) FROM debug_logs WHERE action_type LIKE 'Direct Retest%' AND final_status = 'PASSED'")
-        retest_only = cursor.fetchone()[0] or 0
-
-        cursor.execute("SELECT COUNT(DISTINCT serial_number) FROM debug_logs WHERE action_type NOT LIKE 'Direct Retest%' AND final_status = 'PASSED'")
-        repaired = cursor.fetchone()[0] or 0
-
-        cursor.execute("SELECT COUNT(DISTINCT serial_number) FROM debug_logs WHERE final_status IN ('SCRAPPED', 'FAILED')")
-        scrapped = cursor.fetchone()[0] or 0
-
-        cursor.execute("SELECT error_code, COUNT(*) FROM debug_logs GROUP BY error_code")
-        err_counts = dict(cursor.fetchall())
-
         cursor.execute("SELECT SUM(batch_size) FROM project_batches")
         batch_sum = cursor.fetchone()[0]
         target_batch_size = batch_sum if batch_sum else 0
@@ -395,12 +400,12 @@ def set_batch():
 
     conn = get_db()
     cursor = conn.cursor()
-    placeholder = "%s" if DB_URL else "?"
+    p = "%s" if DB_URL else "?"
     
     if DB_URL:
-        cursor.execute(f"INSERT INTO project_batches (project_number, batch_size) VALUES ({placeholder}, {placeholder}) ON CONFLICT (project_number) DO UPDATE SET batch_size = EXCLUDED.batch_size", (project_number, batch_size))
+        cursor.execute(f"INSERT INTO project_batches (project_number, batch_size) VALUES ({p}, {p}) ON CONFLICT (project_number) DO UPDATE SET batch_size = EXCLUDED.batch_size", (project_number, batch_size))
     else:
-        cursor.execute(f"INSERT OR REPLACE INTO project_batches (project_number, batch_size) VALUES ({placeholder}, {placeholder})", (project_number, batch_size))
+        cursor.execute(f"INSERT OR REPLACE INTO project_batches (project_number, batch_size) VALUES ({p}, {p})", (project_number, batch_size))
         
     conn.commit()
     conn.close()
@@ -420,11 +425,11 @@ def add_log():
 
     conn = get_db()
     cursor = conn.cursor()
-    placeholder = "%s" if DB_URL else "?"
+    p = "%s" if DB_URL else "?"
     
     query = f'''
         INSERT INTO debug_logs (project_number, serial_number, timestamp, error_code, action_type, replaced_components, action_taken, debug_technician, final_status)
-        VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
+        VALUES ({p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p})
     '''
     
     cursor.execute(query, (project_number, sn, timestamp, error_code, action_type, replaced_components, action_taken, tech, final_status))
@@ -437,12 +442,22 @@ def add_log():
 def export():
     conn = get_db()
     df_logs = pd.read_sql_query("SELECT * FROM debug_logs ORDER BY id DESC", conn)
+    
+    latest_query = """
+        WITH latest_logs AS (
+            SELECT d.*, ROW_NUMBER() OVER(PARTITION BY serial_number ORDER BY id DESC) as rn
+            FROM debug_logs d
+        )
+        SELECT * FROM latest_logs WHERE rn = 1 ORDER BY id DESC
+    """
+    df_unique = pd.read_sql_query(latest_query, conn)
     df_batches = pd.read_sql_query("SELECT * FROM project_batches", conn)
     conn.close()
 
     export_path = "Debug_Traceability_Analytics.xlsx"
 
     with pd.ExcelWriter(export_path, engine='openpyxl') as writer:
+        df_unique.to_excel(writer, sheet_name='Unique Boards Latest Status', index=False)
         df_logs.to_excel(writer, sheet_name='Full Retest Audit Trail', index=False)
         df_batches.to_excel(writer, sheet_name='Project Batch Sizes', index=False)
 
