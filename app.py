@@ -41,6 +41,12 @@ def init_db():
                 total_failures INTEGER DEFAULT 0
             );
         ''')
+        # Auto-migrate: Add missing column if table already exists from earlier run
+        try:
+            cursor.execute("ALTER TABLE project_batches ADD COLUMN IF NOT EXISTS total_failures INTEGER DEFAULT 0;")
+        except Exception:
+            pass
+
     else:
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS debug_logs (
@@ -63,6 +69,11 @@ def init_db():
                 total_failures INTEGER DEFAULT 0
             );
         ''')
+        try:
+            cursor.execute("ALTER TABLE project_batches ADD COLUMN total_failures INTEGER DEFAULT 0;")
+        except Exception:
+            pass
+
     conn.commit()
     conn.close()
 
