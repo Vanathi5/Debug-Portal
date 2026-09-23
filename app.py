@@ -444,40 +444,26 @@ def export():
         df_batches.to_excel(writer, sheet_name='Project Batch Sizes', index=False)
 
     return send_file(export_path, as_attachment=True)
-
+    
 @app.route('/reset_database_fresh', methods=['GET', 'POST'])
 def reset_database_fresh():
     conn = get_db()
     cursor = conn.cursor()
     try:
         if DB_URL:
-            # 1. Dynamically find all user tables in PostgreSQL
-            cursor.execute("""
-                SELECT table_name 
-                FROM information_schema.tables 
-                WHERE table_schema = 'public';
-            """)
-            tables = [row[0] for row in cursor.fetchall()]
-            
-            if tables:
-                tables_str = ", ".join(tables)
-                # Wipe all tables found in the database automatically
-                cursor.execute(f"TRUNCATE TABLE {tables_str} RESTART IDENTITY CASCADE;")
-                conn.commit()
-                return f"<h1>Successfully wiped database tables: [{tables_str}]</h1><br><a href='/'>Go to Clean Dashboard</a>"
-            else:
-                return "<h1>No tables found in database.</h1>"
+            # Drop all records from both tables in PostgreSQL
+            cursor.execute("TRUNCATE TABLE debug_logs, project_batches RESTART IDENTITY CASCADE;")
         else:
-            # SQLite fallback
+            # Drop all records in SQLite
             cursor.execute("DELETE FROM debug_logs;")
             cursor.execute("DELETE FROM project_batches;")
-            conn.commit()
-            return "<h1>SQLite database wiped successfully!</h1><br><a href='/'>Go to Clean Dashboard</a>"
-            
+        conn.commit()
+        return "<h1>DATABASE FULLY WIPED! SYSTEM IS FRESH FOR PRODUCTION.</h1><br><a href='/'>Go to Clean Dashboard</a>"
     except Exception as e:
         conn.rollback()
-        return f"<h1>Database Reset Error:</h1><p>{str(e)}</p>"
+        return f"<h1>Reset Error:</h1><p>{str(e)}</p>"
     finally:
         conn.close()
+        
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
