@@ -187,15 +187,6 @@ HTML_TEMPLATE = '''
         </div>
     </div>
 
-    <!-- Admin Production Reset Button -->
-<div style="margin: 20px 0; text-align: right;">
-  <form action="/reset_database_fresh" method="POST" onsubmit="return confirm('WARNING: Are you sure you want to completely wipe all test logs for production handover?');">
-    <button type="submit" style="background-color: #dc3545; color: white; padding: 10px 18px; border: none; border-radius: 5px; font-weight: bold; cursor: pointer;">
-      🗑️ Wipe Database for Handover
-    </button>
-  </form>
-</div>
-
     <!-- Entry Form -->
     <div class="card">
         <h3>Log Board Failure / Retest Entry</h3>
@@ -453,26 +444,6 @@ def export():
         df_batches.to_excel(writer, sheet_name='Project Batch Sizes', index=False)
 
     return send_file(export_path, as_attachment=True)
-    
-@app.route('/reset_database_fresh', methods=['GET', 'POST'])
-def reset_database_fresh():
-    conn = get_db()
-    cursor = conn.cursor()
-    try:
-        if DB_URL:
-            # Force wipe all records in PostgreSQL
-            cursor.execute("TRUNCATE TABLE debug_logs, project_batches RESTART IDENTITY CASCADE;")
-        else:
-            # Force wipe all records in SQLite
-            cursor.execute("DELETE FROM debug_logs;")
-            cursor.execute("DELETE FROM project_batches;")
-        conn.commit()
-    except Exception as e:
-        conn.rollback()
-        print(f"Error resetting database: {e}")
-    finally:
-        conn.close()
-    return redirect(url_for('index'))
         
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
