@@ -315,41 +315,19 @@ def index():
 
     p = "%s" if DB_URL else "?"
 
+    # Get all logs to evaluate latest state per serial number reliably in Python
     if selected_project != 'ALL':
-        where_clause = f"WHERE project_number = {p} AND id IN (SELECT MAX(id) FROM debug_logs WHERE project_number = {p} GROUP BY serial_number)"
-        params = [selected_project, selected_project]
+        query = f"SELECT id, project_number, serial_number, timestamp, error_code, action_type, replaced_components, action_taken, debug_technician, final_status FROM debug_logs WHERE project_number = {p} ORDER BY id ASC"
+        cursor.execute(query, (selected_project,))
     else:
-        where_clause = "WHERE id IN (SELECT MAX(id) FROM debug_logs GROUP BY serial_number)"
-        params = []
+        query = "SELECT id, project_number, serial_number, timestamp, error_code, action_type, replaced_components, action_taken, debug_technician, final_status FROM debug_logs ORDER BY id ASC"
+        cursor.execute(query)
 
-    # 1. Fetch latest log entry per serial number for the table
-    logs_query = f"SELECT id, project_number, serial_number, timestamp, error_code, action_type, replaced_components, action_taken, debug_technician, final_status FROM debug_logs {where_clause} ORDER BY id DESC LIMIT 15"
-    cursor.execute(logs_query, params)
-    logs = cursor.fetchall()
+    all_rows = cursor.fetchall()
 
-    # 2. Count metrics strictly on latest board states
-    count_query = f"SELECT COUNT(*) FROM debug_logs {where_clause}"
-    cursor.execute(count_query, params)
-    total_unique = cursor.fetchone()[0] or 0
-
-    retest_query = f"SELECT COUNT(*) FROM debug_logs {where_clause} AND action_type LIKE 'Direct Retest%' AND final_status = 'PASSED'"
-    cursor.execute(retest_query, params)
-    retest_only = cursor.fetchone()[0] or 0
-
-    repaired_query = f"SELECT COUNT(*) FROM debug_logs {where_clause} AND action_type NOT LIKE 'Direct Retest%' AND final_status = 'PASSED'"
-    cursor.execute(repaired_query, params)
-    repaired = cursor.fetchone()[0] or 0
-
-    scrapped_query = f"SELECT COUNT(*) FROM debug_logs {where_clause} AND final_status IN ('SCRAPPED', 'FAILED')"
-    cursor.execute(scrapped_query, params)
-    scrapped = cursor.fetchone()[0] or 0
-
-    err_query = f"SELECT error_code, COUNT(*) FROM debug_logs {where_clause} GROUP BY error_code"
-    cursor.execute(err_query, params)
-    err_counts = dict(cursor.fetchall())
-
+    # Get batch size
     if selected_project != 'ALL':
-        cursor.execute(f"SELECT batch_size FROM project_batches WHERE project_number = {p}", [selected_project])
+        cursor.execute(f"SELECT batch_size FROM project_batches WHERE project_number = {p}", (selected_project,))
         batch_row = cursor.fetchone()
         target_batch_size = batch_row[0] if batch_row else 0
     else:
@@ -358,6 +336,26 @@ def index():
         target_batch_size = batch_sum if batch_sum else 0
 
     conn.close()
+
+    # Map serial numbers to their LATEST log entry
+    latest_per_sn = {}
+    for row in all_rows:
+        sn = row[2]
+        latest_per_sn[sn] = row
+
+    latest_logs = list(latest_per_sn.values())
+    latest_logs.sort(key=lambda x: x[0], reverse=True) # Sort descending by ID
+
+    # Compute metrics on unique latest board entries
+    total_unique = len(latest_logs)
+    retest_only = sum(1 for r in latest_logs if 'Direct Retest' in r[5] and r[9] == 'PASSED')
+    repaired = sum(1 for r in latest_logs if 'Direct Retest' not in r[5] and r[9] == 'PASSED')
+    scrapped = sum(1 for r in latest_logs if r[9] in ('SCRAPPED', 'FAILED'))
+
+    err_counts = {}
+    for r in latest_logs:
+        err = r[4]
+        err_counts[err] = err_counts.get(err, 0) + 1
 
     overall_yield = round(((target_batch_size - scrapped) / target_batch_size) * 100, 2) if target_batch_size > 0 else 0.0
 
@@ -373,7 +371,7 @@ def index():
 
     return render_template_string(
         HTML_TEMPLATE, 
-        logs=logs, 
+        logs=latest_logs[:15], 
         stats=stats, 
         err_counts=err_counts, 
         available_projects=available_projects, 
@@ -431,15 +429,11 @@ def add_log():
 def export():
     conn = get_db()
     df_logs = pd.read_sql_query("SELECT * FROM debug_logs ORDER BY id DESC", conn)
-    
-    latest_query = """
-        SELECT * FROM debug_logs 
-        WHERE id IN (SELECT MAX(id) FROM debug_logs GROUP BY serial_number)
-        ORDER BY id DESC
-    """
-    df_unique = pd.read_sql_query(latest_query, conn)
     df_batches = pd.read_sql_query("SELECT * FROM project_batches", conn)
     conn.close()
+
+    # Extract unique latest status per board
+    df_unique = df_logs.sort_values('id').groupby('serial_number').last().reset_index()
 
     export_path = "Debug_Traceability_Analytics.xlsx"
 
