@@ -37,7 +37,8 @@ def init_db():
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS project_batches (
                 project_number TEXT PRIMARY KEY,
-                batch_size INTEGER NOT NULL
+                batch_size INTEGER NOT NULL,
+                total_failures INTEGER DEFAULT 0
             );
         ''')
     else:
@@ -58,7 +59,8 @@ def init_db():
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS project_batches (
                 project_number TEXT PRIMARY KEY,
-                batch_size INTEGER NOT NULL
+                batch_size INTEGER NOT NULL,
+                total_failures INTEGER DEFAULT 0
             );
         ''')
     conn.commit()
@@ -136,58 +138,59 @@ HTML_TEMPLATE = '''
             <div>Planned Batch Size</div>
             <div class="stat-pct">Total Target Boards</div>
         </div>
-        <div class="stat-box">
-            <div class="stat-number">{{ stats['total'] }}</div>
-            <div>Total Unique Boards</div>
-            <div class="stat-pct">Unique Defective Boards</div>
+        <div class="stat-box" style="border-top: 3px solid #dc3545;">
+            <div class="stat-number" style="color: #dc3545;">{{ stats['total_official_failures'] }}</div>
+            <div>Total Line Failures</div>
+            <div class="stat-pct">{{ stats['portal_logged'] }} Logged / <span style="color:#dc3545; font-weight:bold;">{{ stats['unlogged'] }} Missing</span></div>
+        </div>
+        <div class="stat-box" style="border-top: 3px solid #28a745;">
+            <div class="stat-number" style="color: #28a745;">{{ stats['first_pass_yield'] }}%</div>
+            <div>First Pass Yield (FPY)</div>
+            <div class="stat-pct"><strong>{{ stats['first_pass'] }}</strong> Passed 1st Time</div>
         </div>
         <div class="stat-box">
             <div class="stat-number" style="color: #17a2b8;">{{ stats['retest_only'] }}</div>
-            <div>Direct Retest Pass</div>
-            <div class="stat-pct"><strong>{{ stats['retest_pct'] }}%</strong> of Unique</div>
+            <div>Retest Recovered</div>
+            <div class="stat-pct">Direct Retest Pass</div>
         </div>
         <div class="stat-box">
             <div class="stat-number" style="color: #28a745;">{{ stats['repaired'] }}</div>
-            <div>Repaired & Passed</div>
-            <div class="stat-pct"><strong>{{ stats['repaired_pct'] }}%</strong> of Unique</div>
-        </div>
-        <div class="stat-box">
-            <div class="stat-number" style="color: #dc3545;">{{ stats['scrapped'] }}</div>
-            <div>Currently Failed/Scrapped</div>
-            <div class="stat-pct"><strong>{{ stats['scrapped_pct'] }}%</strong> of Unique</div>
+            <div>Rework Recovered</div>
+            <div class="stat-pct">Repaired & Passed</div>
         </div>
         <div class="stat-box" style="border: 2px solid #28a745;">
             <div class="stat-number" style="color: #28a745;">{{ overall_yield }}%</div>
             <div>True Production Yield</div>
-            <div class="stat-pct">(Batch - Scrap) / Batch</div>
+            <div class="stat-pct">(FPY + Recovered) / Batch</div>
         </div>
     </div>
 
-    <!-- Update Project Batch Size -->
+    <!-- Update Project Batch Size & Failure Count -->
     <div class="card" style="padding: 15px; background: #f0f4f8;">
-        <h4 style="margin-bottom: 10px;">⚙️ Update Project Batch Size</h4>
+        <h4 style="margin-bottom: 10px;">⚙️ Update Project Production Targets</h4>
         <form action="/set_batch" method="POST" style="display: flex; gap: 10px; align-items: center;">
             <input type="text" name="project_number" placeholder="Project # (e.g. EN107577)" value="{{ selected_project if selected_project != 'ALL' else '' }}" required style="flex: 1;">
-            <input type="number" name="batch_size" placeholder="Total Planned Boards (e.g. 400)" value="{{ target_batch_size if target_batch_size > 0 else '' }}" required style="flex: 1;">
-            <button type="submit" style="width: auto;">Save Batch Size</button>
+            <input type="number" name="batch_size" placeholder="Total Batch Size (e.g. 400)" value="{{ target_batch_size if target_batch_size > 0 else '' }}" required style="flex: 1;">
+            <input type="number" name="total_failures" placeholder="Official Failure Count (e.g. 12)" value="{{ stats['total_official_failures'] }}" required style="flex: 1;">
+            <button type="submit" style="width: auto;">Save Project Settings</button>
         </form>
     </div>
 
     <!-- Failure Type Breakdown Cards -->
     <div class="card" style="padding: 15px;">
-        <h4 style="margin-top:0;">Initial Failure Breakdown (Latest per Board)</h4>
+        <h4 style="margin-top:0;">Initial Failure Breakdown (Logged Entries)</h4>
         <div style="display: flex; gap: 10px; font-size: 13px; flex-wrap: wrap;">
             {% for code, count in err_counts.items() %}
             <div style="background: #f0f4f8; padding: 8px 12px; border-radius: 5px; flex: 1; min-width: 120px; text-align: center;">
                 <strong>{{ code }}</strong><br>
                 <span style="font-size: 16px; font-weight: bold; color: #102C57;">{{ count }}</span> 
-                <span style="color: #555;">({{ "%.1f"|format(count / stats['total'] * 100) if stats['total'] > 0 else 0 }}%)</span>
+                <span style="color: #555;">({{ "%.1f"|format(count / stats['portal_logged'] * 100) if stats['portal_logged'] > 0 else 0 }}%)</span>
             </div>
             {% endfor %}
         </div>
     </div>
 
-    <!-- Horizontal Entry Form -->
+    <!-- Entry Form -->
     <div class="card">
         <h3>Log Board Failure / Retest Entry</h3>
         <form action="/add" method="POST">
@@ -315,7 +318,6 @@ def index():
 
     p = "%s" if DB_URL else "?"
 
-    # Get all logs to evaluate latest state per serial number reliably in Python
     if selected_project != 'ALL':
         query = f"SELECT id, project_number, serial_number, timestamp, error_code, action_type, replaced_components, action_taken, debug_technician, final_status FROM debug_logs WHERE project_number = {p} ORDER BY id ASC"
         cursor.execute(query, (selected_project,))
@@ -325,48 +327,56 @@ def index():
 
     all_rows = cursor.fetchall()
 
-    # Get batch size
     if selected_project != 'ALL':
-        cursor.execute(f"SELECT batch_size FROM project_batches WHERE project_number = {p}", (selected_project,))
+        cursor.execute(f"SELECT batch_size, COALESCE(total_failures, 0) FROM project_batches WHERE project_number = {p}", (selected_project,))
         batch_row = cursor.fetchone()
         target_batch_size = batch_row[0] if batch_row else 0
+        official_failures = batch_row[1] if batch_row else 0
     else:
-        cursor.execute("SELECT SUM(batch_size) FROM project_batches")
-        batch_sum = cursor.fetchone()[0]
-        target_batch_size = batch_sum if batch_sum else 0
+        cursor.execute("SELECT SUM(batch_size), SUM(COALESCE(total_failures, 0)) FROM project_batches")
+        batch_sum = cursor.fetchone()
+        target_batch_size = batch_sum[0] if (batch_sum and batch_sum[0]) else 0
+        official_failures = batch_sum[1] if (batch_sum and batch_sum[1]) else 0
 
     conn.close()
 
-    # Map serial numbers to their LATEST log entry
+    # Get latest status per serial number
     latest_per_sn = {}
     for row in all_rows:
         sn = row[2]
         latest_per_sn[sn] = row
 
     latest_logs = list(latest_per_sn.values())
-    latest_logs.sort(key=lambda x: x[0], reverse=True) # Sort descending by ID
+    latest_logs.sort(key=lambda x: x[0], reverse=True)
 
-    # Compute metrics on unique latest board entries
-    total_unique = len(latest_logs)
+    # Metrics calculation
+    portal_logged_failures = len(latest_logs)
+    unlogged_failures = max(0, official_failures - portal_logged_failures)
+
+    first_pass_count = max(0, target_batch_size - official_failures) if target_batch_size > 0 else 0
+    first_pass_yield = round((first_pass_count / target_batch_size) * 100, 2) if target_batch_size > 0 else 0.0
+
     retest_only = sum(1 for r in latest_logs if 'Direct Retest' in r[5] and r[9] == 'PASSED')
     repaired = sum(1 for r in latest_logs if 'Direct Retest' not in r[5] and r[9] == 'PASSED')
     scrapped = sum(1 for r in latest_logs if r[9] in ('SCRAPPED', 'FAILED'))
+
+    total_recovered = retest_only + repaired
+    overall_yield = round(((first_pass_count + total_recovered) / target_batch_size) * 100, 2) if target_batch_size > 0 else 0.0
 
     err_counts = {}
     for r in latest_logs:
         err = r[4]
         err_counts[err] = err_counts.get(err, 0) + 1
 
-    overall_yield = round(((target_batch_size - scrapped) / target_batch_size) * 100, 2) if target_batch_size > 0 else 0.0
-
     stats = {
-        'total': total_unique,
+        'total_official_failures': official_failures,
+        'portal_logged': portal_logged_failures,
+        'unlogged': unlogged_failures,
+        'first_pass': first_pass_count,
+        'first_pass_yield': first_pass_yield,
         'retest_only': retest_only,
-        'retest_pct': round((retest_only / total_unique) * 100, 1) if total_unique > 0 else 0,
         'repaired': repaired,
-        'repaired_pct': round((repaired / total_unique) * 100, 1) if total_unique > 0 else 0,
         'scrapped': scrapped,
-        'scrapped_pct': round((scrapped / total_unique) * 100, 1) if total_unique > 0 else 0,
     }
 
     return render_template_string(
@@ -384,15 +394,16 @@ def index():
 def set_batch():
     project_number = request.form['project_number'].strip()
     batch_size = int(request.form['batch_size'])
+    total_failures = int(request.form['total_failures'])
 
     conn = get_db()
     cursor = conn.cursor()
     p = "%s" if DB_URL else "?"
     
     if DB_URL:
-        cursor.execute(f"INSERT INTO project_batches (project_number, batch_size) VALUES ({p}, {p}) ON CONFLICT (project_number) DO UPDATE SET batch_size = EXCLUDED.batch_size", (project_number, batch_size))
+        cursor.execute(f"INSERT INTO project_batches (project_number, batch_size, total_failures) VALUES ({p}, {p}, {p}) ON CONFLICT (project_number) DO UPDATE SET batch_size = EXCLUDED.batch_size, total_failures = EXCLUDED.total_failures", (project_number, batch_size, total_failures))
     else:
-        cursor.execute(f"INSERT OR REPLACE INTO project_batches (project_number, batch_size) VALUES ({p}, {p})", (project_number, batch_size))
+        cursor.execute(f"INSERT OR REPLACE INTO project_batches (project_number, batch_size, total_failures) VALUES ({p}, {p}, {p})", (project_number, batch_size, total_failures))
         
     conn.commit()
     conn.close()
@@ -432,7 +443,6 @@ def export():
     df_batches = pd.read_sql_query("SELECT * FROM project_batches", conn)
     conn.close()
 
-    # Extract unique latest status per board
     df_unique = df_logs.sort_values('id').groupby('serial_number').last().reset_index()
 
     export_path = "Debug_Traceability_Analytics.xlsx"
@@ -440,7 +450,7 @@ def export():
     with pd.ExcelWriter(export_path, engine='openpyxl') as writer:
         df_unique.to_excel(writer, sheet_name='Unique Boards Latest Status', index=False)
         df_logs.to_excel(writer, sheet_name='Full Retest Audit Trail', index=False)
-        df_batches.to_excel(writer, sheet_name='Project Batch Sizes', index=False)
+        df_batches.to_excel(writer, sheet_name='Project Settings', index=False)
 
     return send_file(export_path, as_attachment=True)
 
