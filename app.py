@@ -32,13 +32,13 @@ def init_db():
                 action_taken TEXT,
                 debug_technician TEXT,
                 final_status TEXT NOT NULL
-            )
+            );
         ''')
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS project_batches (
                 project_number TEXT PRIMARY KEY,
                 batch_size INTEGER NOT NULL
-            )
+            );
         ''')
     else:
         cursor.execute('''
@@ -53,13 +53,13 @@ def init_db():
                 action_taken TEXT,
                 debug_technician TEXT,
                 final_status TEXT NOT NULL
-            )
+            );
         ''')
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS project_batches (
                 project_number TEXT PRIMARY KEY,
                 batch_size INTEGER NOT NULL
-            )
+            );
         ''')
     conn.commit()
     conn.close()
@@ -87,7 +87,6 @@ HTML_TEMPLATE = '''
         button:hover { background-color: #0b1f3f; }
         
         .btn-export { background-color: #28a745; width: auto; float: right; padding: 8px 15px; font-size: 14px; text-decoration: none; color: white; border-radius: 4px; font-weight: bold; }
-        .btn-clear { background-color: #dc3545; width: auto; float: right; padding: 8px 15px; font-size: 14px; text-decoration: none; color: white; border-radius: 4px; font-weight: bold; margin-right: 10px; }
         
         .stats { display: flex; justify-content: space-between; margin-bottom: 20px; gap: 10px; }
         .stat-box { background: white; padding: 15px; border-radius: 6px; text-align: center; flex: 1; box-shadow: 0 1px 5px rgba(0,0,0,0.05); }
@@ -304,7 +303,7 @@ HTML_TEMPLATE = '''
 </html>
 '''
 
-@app.route('/', methods=['GET', 'POST'])
+@app.route('/', methods=['GET'])
 def index():
     selected_project = request.args.get('filter_project', 'ALL').strip()
 
@@ -314,75 +313,52 @@ def index():
     cursor.execute("SELECT DISTINCT project_number FROM debug_logs UNION SELECT project_number FROM project_batches")
     available_projects = [row[0] for row in cursor.fetchall() if row[0]]
 
-    p = "%s" if DB_URL else "?"
-    params = [selected_project] if selected_project != 'ALL' else []
-    
-    # Query for Unique Serial Numbers (Latest Row)
-    if selected_project != 'ALL':
-        logs_query = f"""
-            SELECT d.* FROM debug_logs d
-            INNER JOIN (
-                SELECT serial_number, MAX(id) as max_id 
-                FROM debug_logs 
-                WHERE project_number = {p}
-                GROUP BY serial_number
-            ) AS latest ON d.id = latest.max_id
-            ORDER BY d.id DESC LIMIT 15
-        """
-        latest_boards_query = f"""
-            FROM debug_logs d
-            INNER JOIN (
-                SELECT serial_number, MAX(id) as max_id 
-                FROM debug_logs 
-                WHERE project_number = {p}
-                GROUP BY serial_number
-            ) AS latest ON d.id = latest.max_id
-        """
-        sub_params = [selected_project]
-    else:
-        logs_query = """
-            SELECT d.* FROM debug_logs d
-            INNER JOIN (
-                SELECT serial_number, MAX(id) as max_id 
-                FROM debug_logs 
-                GROUP BY serial_number
-            ) AS latest ON d.id = latest.max_id
-            ORDER BY d.id DESC LIMIT 15
-        """
-        latest_boards_query = """
-            FROM debug_logs d
-            INNER JOIN (
-                SELECT serial_number, MAX(id) as max_id 
-                FROM debug_logs 
-                GROUP BY serial_number
-            ) AS latest ON d.id = latest.max_id
-        """
-        sub_params = []
+    placeholder = "%s" if DB_URL else "?"
 
-    cursor.execute(logs_query, params)
+    if selected_project != 'ALL':
+        logs_query = f"SELECT * FROM debug_logs WHERE project_number = {placeholder} ORDER BY id DESC LIMIT 15"
+        cursor.execute(logs_query, (selected_project,))
+    else:
+        logs_query = "SELECT * FROM debug_logs ORDER BY id DESC LIMIT 15"
+        cursor.execute(logs_query)
+        
     logs = cursor.fetchall()
 
-    # Metrics queries based on UNIQUE latest board status
-    cursor.execute(f"SELECT COUNT(*) {latest_boards_query}", sub_params)
-    total_unique = cursor.fetchone()[0] or 0
-
-    cursor.execute(f"SELECT COUNT(*) {latest_boards_query} WHERE d.action_type LIKE 'Direct Retest%' AND d.final_status = 'PASSED'", sub_params)
-    retest_only = cursor.fetchone()[0] or 0
-
-    cursor.execute(f"SELECT COUNT(*) {latest_boards_query} WHERE d.action_type NOT LIKE 'Direct Retest%' AND d.final_status = 'PASSED'", sub_params)
-    repaired = cursor.fetchone()[0] or 0
-
-    cursor.execute(f"SELECT COUNT(*) {latest_boards_query} WHERE d.final_status IN ('SCRAPPED', 'FAILED')", sub_params)
-    scrapped = cursor.fetchone()[0] or 0
-
-    cursor.execute(f"SELECT d.error_code, COUNT(*) {latest_boards_query} GROUP BY d.error_code", sub_params)
-    err_counts = dict(cursor.fetchall())
-
     if selected_project != 'ALL':
-        cursor.execute(f"SELECT batch_size FROM project_batches WHERE project_number = {p}", [selected_project])
+        cursor.execute(f"SELECT COUNT(DISTINCT serial_number) FROM debug_logs WHERE project_number = {placeholder}", (selected_project,))
+        total_unique = cursor.fetchone()[0] or 0
+
+        cursor.execute(f"SELECT COUNT(DISTINCT serial_number) FROM debug_logs WHERE project_number = {placeholder} AND action_type LIKE 'Direct Retest%' AND final_status = 'PASSED'", (selected_project,))
+        retest_only = cursor.fetchone()[0] or 0
+
+        cursor.execute(f"SELECT COUNT(DISTINCT serial_number) FROM debug_logs WHERE project_number = {placeholder} AND action_type NOT LIKE 'Direct Retest%' AND final_status = 'PASSED'", (selected_project,))
+        repaired = cursor.fetchone()[0] or 0
+
+        cursor.execute(f"SELECT COUNT(DISTINCT serial_number) FROM debug_logs WHERE project_number = {placeholder} AND final_status IN ('SCRAPPED', 'FAILED')", (selected_project,))
+        scrapped = cursor.fetchone()[0] or 0
+
+        cursor.execute(f"SELECT error_code, COUNT(*) FROM debug_logs WHERE project_number = {placeholder} GROUP BY error_code", (selected_project,))
+        err_counts = dict(cursor.fetchall())
+
+        cursor.execute(f"SELECT batch_size FROM project_batches WHERE project_number = {placeholder}", (selected_project,))
         batch_row = cursor.fetchone()
         target_batch_size = batch_row[0] if batch_row else 0
     else:
+        cursor.execute("SELECT COUNT(DISTINCT serial_number) FROM debug_logs")
+        total_unique = cursor.fetchone()[0] or 0
+
+        cursor.execute("SELECT COUNT(DISTINCT serial_number) FROM debug_logs WHERE action_type LIKE 'Direct Retest%' AND final_status = 'PASSED'")
+        retest_only = cursor.fetchone()[0] or 0
+
+        cursor.execute("SELECT COUNT(DISTINCT serial_number) FROM debug_logs WHERE action_type NOT LIKE 'Direct Retest%' AND final_status = 'PASSED'")
+        repaired = cursor.fetchone()[0] or 0
+
+        cursor.execute("SELECT COUNT(DISTINCT serial_number) FROM debug_logs WHERE final_status IN ('SCRAPPED', 'FAILED')")
+        scrapped = cursor.fetchone()[0] or 0
+
+        cursor.execute("SELECT error_code, COUNT(*) FROM debug_logs GROUP BY error_code")
+        err_counts = dict(cursor.fetchall())
+
         cursor.execute("SELECT SUM(batch_size) FROM project_batches")
         batch_sum = cursor.fetchone()[0]
         target_batch_size = batch_sum if batch_sum else 0
@@ -419,12 +395,12 @@ def set_batch():
 
     conn = get_db()
     cursor = conn.cursor()
-    p = "%s" if DB_URL else "?"
+    placeholder = "%s" if DB_URL else "?"
     
     if DB_URL:
-        cursor.execute(f"INSERT INTO project_batches (project_number, batch_size) VALUES ({p}, {p}) ON CONFLICT (project_number) DO UPDATE SET batch_size = EXCLUDED.batch_size", (project_number, batch_size))
+        cursor.execute(f"INSERT INTO project_batches (project_number, batch_size) VALUES ({placeholder}, {placeholder}) ON CONFLICT (project_number) DO UPDATE SET batch_size = EXCLUDED.batch_size", (project_number, batch_size))
     else:
-        cursor.execute(f"INSERT OR REPLACE INTO project_batches (project_number, batch_size) VALUES ({p}, {p})", (project_number, batch_size))
+        cursor.execute(f"INSERT OR REPLACE INTO project_batches (project_number, batch_size) VALUES ({placeholder}, {placeholder})", (project_number, batch_size))
         
     conn.commit()
     conn.close()
@@ -444,11 +420,11 @@ def add_log():
 
     conn = get_db()
     cursor = conn.cursor()
-    p = "%s" if DB_URL else "?"
+    placeholder = "%s" if DB_URL else "?"
     
     query = f'''
         INSERT INTO debug_logs (project_number, serial_number, timestamp, error_code, action_type, replaced_components, action_taken, debug_technician, final_status)
-        VALUES ({p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p})
+        VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
     '''
     
     cursor.execute(query, (project_number, sn, timestamp, error_code, action_type, replaced_components, action_taken, tech, final_status))
@@ -461,30 +437,14 @@ def add_log():
 def export():
     conn = get_db()
     df_logs = pd.read_sql_query("SELECT * FROM debug_logs ORDER BY id DESC", conn)
-    
-    latest_query = """
-        SELECT d.* FROM debug_logs d
-        INNER JOIN (
-            SELECT serial_number, MAX(id) as max_id 
-            FROM debug_logs 
-            GROUP BY serial_number
-        ) AS latest ON d.id = latest.max_id
-        ORDER BY d.id DESC
-    """
-    df_unique = pd.read_sql_query(latest_query, conn)
     df_batches = pd.read_sql_query("SELECT * FROM project_batches", conn)
     conn.close()
 
     export_path = "Debug_Traceability_Analytics.xlsx"
 
     with pd.ExcelWriter(export_path, engine='openpyxl') as writer:
-        df_unique.to_excel(writer, sheet_name='Unique Boards Latest Status', index=False)
         df_logs.to_excel(writer, sheet_name='Full Retest Audit Trail', index=False)
         df_batches.to_excel(writer, sheet_name='Project Batch Sizes', index=False)
-
-        if not df_unique.empty and 'error_code' in df_unique.columns and 'action_type' in df_unique.columns:
-            pivot_table = pd.crosstab(df_unique['error_code'], df_unique['action_type'], margins=True, margins_name='Total')
-            pivot_table.to_excel(writer, sheet_name='Failure vs Resolution Summary')
 
     return send_file(export_path, as_attachment=True)
 
