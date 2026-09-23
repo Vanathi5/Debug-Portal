@@ -112,9 +112,6 @@ HTML_TEMPLATE = '''
     <div style="overflow: hidden; margin-bottom: 10px;">
         <h2 style="float: left;">SAI50 Program - Traceability & Yield Analytics</h2>
         <a href="/export" class="btn-export">📊 Export Full Excel Analytics</a>
-        <!-- Hidden for production
-        <a href="/clear_test_data" class="btn-clear" onclick="return confirm('Are you sure you want to delete all log entries and reset IDs to 1?');">🗑️ Clear Trial Data</a>
-        -->
     </div>
 
     <!-- Filter Bar -->
@@ -198,7 +195,7 @@ HTML_TEMPLATE = '''
             <div class="grid">
                 <div>
                     <label for="project">1. Project Number (e.g., EN107577):</label>
-                    <input type="text" id="project" name="project_number" placeholder="e.g. 707577" value="{{ selected_project if selected_project != 'ALL' else '' }}" required>
+                    <input type="text" id="project" name="project_number" placeholder="e.g. EN107577" value="{{ selected_project if selected_project != 'ALL' else '' }}" required>
                 </div>
 
                 <div>
@@ -214,7 +211,7 @@ HTML_TEMPLATE = '''
                         <option value="Production Troot Programming">Production Troot Programming</option>
                         <option value="Linux Login Fail">Linux Login Fail</option>
                         <option value="Extended eMMc Failure">Extended eMMc Failure</option>
-                        <option value="Extended eMMc Failure">Serial Communication(Error Connecting to USB1)</option>
+                        <option value="Serial Communication">Serial Communication(Error Connecting to USB1)</option>
                         <option value="No Power">No Power</option>
                         <option value="OTHER">OTHER (Specify in notes)</option>
                     </select>
@@ -288,7 +285,7 @@ HTML_TEMPLATE = '''
                     <td>{{ row[5] }}</td>
                     <td>{{ row[6] if row[6] else '-' }}</td>
                     <td>
-                        {% if row[9] == 'PASSED' and row[5] == 'Direct Retest (No Repair)' %}
+                        {% if row[9] == 'PASSED' and 'Direct Retest' in row[5] %}
                             <span class="badge-retest">RETEST PASS</span>
                         {% elif row[9] == 'PASSED' %}
                             <span class="badge-pass">REPAIRED PASS</span>
@@ -318,11 +315,9 @@ def index():
     available_projects = [row[0] for row in cursor.fetchall() if row[0]]
 
     p = "%s" if DB_URL else "?"
-    
-    where_clause = f" WHERE project_number = {p}" if selected_project != 'ALL' else ""
     params = [selected_project] if selected_project != 'ALL' else []
     
-    # --- OPTION 2: Fetch only the LATEST entry for each unique Serial Number ---
+    # Query for Unique Serial Numbers (Latest Row)
     if selected_project != 'ALL':
         logs_query = f"""
             SELECT d.* FROM debug_logs d
@@ -334,22 +329,6 @@ def index():
             ) latest ON d.id = latest.max_id
             ORDER BY d.id DESC LIMIT 15
         """
-    else:
-        logs_query = """
-            SELECT d.* FROM debug_logs d
-            INNER JOIN (
-                SELECT serial_number, MAX(id) as max_id 
-                FROM debug_logs 
-                GROUP BY serial_number
-            ) latest ON d.id = latest.max_id
-            ORDER BY d.id DESC LIMIT 15
-        """
-        
-    cursor.execute(logs_query, params)
-    logs = cursor.fetchall()
-
-    # Metrics queries
-    if selected_project != 'ALL':
         latest_boards_query = f"""
             FROM debug_logs d
             INNER JOIN (
@@ -361,6 +340,15 @@ def index():
         """
         sub_params = [selected_project]
     else:
+        logs_query = """
+            SELECT d.* FROM debug_logs d
+            INNER JOIN (
+                SELECT serial_number, MAX(id) as max_id 
+                FROM debug_logs 
+                GROUP BY serial_number
+            ) latest ON d.id = latest.max_id
+            ORDER BY d.id DESC LIMIT 15
+        """
         latest_boards_query = """
             FROM debug_logs d
             INNER JOIN (
@@ -371,13 +359,17 @@ def index():
         """
         sub_params = []
 
+    cursor.execute(logs_query, params)
+    logs = cursor.fetchall()
+
+    # Metrics queries based on UNIQUE latest board status
     cursor.execute(f"SELECT COUNT(*) {latest_boards_query}", sub_params)
     total_unique = cursor.fetchone()[0] or 0
 
-    cursor.execute(f"SELECT COUNT(*) {latest_boards_query} WHERE d.action_type = 'Direct Retest (No Repair)' AND d.final_status = 'PASSED'", sub_params)
+    cursor.execute(f"SELECT COUNT(*) {latest_boards_query} WHERE d.action_type LIKE 'Direct Retest%' AND d.final_status = 'PASSED'", sub_params)
     retest_only = cursor.fetchone()[0] or 0
 
-    cursor.execute(f"SELECT COUNT(*) {latest_boards_query} WHERE d.action_type != 'Direct Retest (No Repair)' AND d.final_status = 'PASSED'", sub_params)
+    cursor.execute(f"SELECT COUNT(*) {latest_boards_query} WHERE d.action_type NOT LIKE 'Direct Retest%' AND d.final_status = 'PASSED'", sub_params)
     repaired = cursor.fetchone()[0] or 0
 
     cursor.execute(f"SELECT COUNT(*) {latest_boards_query} WHERE d.final_status IN ('SCRAPPED', 'FAILED')", sub_params)
@@ -419,6 +411,7 @@ def index():
         target_batch_size=target_batch_size,
         overall_yield=overall_yield
     )
+
 @app.route('/set_batch', methods=['POST'])
 def set_batch():
     project_number = request.form['project_number'].strip()
@@ -463,23 +456,7 @@ def add_log():
     conn.close()
 
     return redirect(url_for('index', filter_project=project_number))
-'''
-#Hidden for Production
-@app.route('/clear_test_data')
-def clear_test_data():
-    conn = get_db()
-    cursor = conn.cursor()
-    
-    if DB_URL:
-        cursor.execute("TRUNCATE TABLE debug_logs RESTART IDENTITY;")
-    else:
-        cursor.execute("DELETE FROM debug_logs;")
-        cursor.execute("DELETE FROM sqlite_sequence WHERE name='debug_logs';")
-        
-    conn.commit()
-    conn.close()
-    return redirect(url_for('index'))
-'''
+
 @app.route('/export')
 def export():
     conn = get_db()
